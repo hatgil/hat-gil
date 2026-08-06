@@ -1,2 +1,2 @@
-import MapApp from "./map-app";
-export default function Home(){return <MapApp/>}
+import DynamicMap from "./map-dynamic";
+export default function Home(){return <DynamicMap/>}
