@@ -19,7 +19,6 @@ export default function MapApp() {
   const mapNode = useRef<HTMLDivElement>(null), map = useRef<any>(), items = useRef<any[]>([]), path = useRef<any>();
   const [active, setActive] = useState<Kind[]>(["wind", "shade"]), [hour, setHour] = useState(14), [panelOpen, setPanelOpen] = useState(true);
   const [start, setStart] = useState("미포항"), [end, setEnd] = useState("청사포 다릿돌전망대"), [route, setRoute] = useState<number[][]>(routes.cool.map(x => [...x])), [message, setMessage] = useState("장소를 입력하고 AI 최적 경로를 눌러 주세요."), [loading, setLoading] = useState(false);
-  const [anchors, setAnchors] = useState<[[number, number], [number, number]] | null>(null);
   const uv = Math.max(0, 8 - Math.abs(hour - 13) * 2), temp = Math.round(23 + 7 * Math.sin((hour - 7) / 24 * Math.PI * 2));
   const fog = Math.max(12, Math.round(72 - 3 * hour + 18 * Math.cos(hour / 3))), crowd = hour >= 17 && hour <= 21 ? 76 : hour >= 11 && hour <= 16 ? 55 : 28;
 
@@ -53,16 +52,8 @@ export default function MapApp() {
   const resolvePlace = async (name: string): Promise<[number, number] | null> => {
     const presets: Record<string, [number, number]> = { "미포항": [35.1595,129.1707], "청사포다릿돌전망대": [35.1607,129.1907], "해운대역": [35.1631,129.1588], "달맞이길": [35.1642,129.1788] };
     const compact = name.replaceAll(" ", ""); if (presets[compact]) return presets[compact];
-    try {
-      const result = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=kr&viewbox=128.75,35.4,129.35,34.85&bounded=1&q=${encodeURIComponent("부산 " + name)}`).then(r => r.json());
-      if (result[0]) return [+result[0].lat, +result[0].lon];
-    } catch {}
-    try {
-      const photon = await fetch(`https://photon.komoot.io/api/?limit=1&lang=ko&q=${encodeURIComponent(name + " 부산")}`).then(r => r.json());
-      const coordinates = photon.features?.[0]?.geometry?.coordinates;
-      if (coordinates) return [+coordinates[1], +coordinates[0]];
-    } catch {}
-    return null;
+    const result = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=kr&q=${encodeURIComponent(name + ", 부산")}`).then(r => r.json());
+    return result[0] ? [+result[0].lat, +result[0].lon] : null;
   };
   const findRoute = async () => {
     if (!start.trim() || !end.trim()) return setMessage("출발지와 도착지를 모두 입력해 주세요.");
@@ -70,32 +61,12 @@ export default function MapApp() {
     setLoading(true); setMessage("입력한 장소와 시간대 환경을 분석하고 있습니다…");
     try {
       const [from, to] = await Promise.all([resolvePlace(start), resolvePlace(end)]); if (!from || !to) throw new Error("place");
-      setAnchors([from, to]);
       const offset = hour >= 11 && hour <= 16 ? -.0011 : hour < 6 || hour >= 20 ? .0007 : -.0003;
       const via: [number, number] = [(from[0] + to[0]) / 2 + offset, (from[1] + to[1]) / 2 + offset * .7]; let next: number[][] = [from, via, to];
       try { const coords = `${from[1]},${from[0]};${via[1]},${via[0]};${to[1]},${to[0]}`; const result = await fetch(`https://routing.openstreetmap.de/routed-foot/route/v1/driving/${coords}?overview=full&geometries=geojson`).then(r => r.json()); if (result.routes?.[0]?.geometry?.coordinates) next = result.routes[0].geometry.coordinates.map((p: number[]) => [p[1], p[0]]); } catch {}
       setRoute(next); map.current?.fitBounds(window.L.latLngBounds(next), { padding: [70, 70] }); setMessage(`${start}에서 ${end}까지 ${hour}시 환경을 반영한 경로입니다.`);
     } catch { setMessage("장소를 찾지 못했습니다. 부산의 구체적인 육지 장소명을 입력해 주세요."); } finally { setLoading(false); }
   };
-  useEffect(() => {
-    if (!anchors) return;
-    const timer = window.setTimeout(() => {
-      const [from, to] = anchors;
-      const profile = hour < 6 || hour >= 20 ? "야간 안전" : hour >= 11 && hour <= 16 ? "그늘·해풍" : "쾌적 균형";
-      const bend = hour < 6 || hour >= 20 ? .0042 : hour >= 11 && hour <= 16 ? -.0045 : .0014;
-      const latSpan = to[0] - from[0], lonSpan = to[1] - from[1];
-      const timedRoute: number[][] = [
-        from,
-        [from[0] + latSpan * .3 + bend * .55, from[1] + lonSpan * .3 - bend],
-        [from[0] + latSpan * .68 + bend, from[1] + lonSpan * .68 - bend * .45],
-        to,
-      ];
-      setRoute(timedRoute);
-      map.current?.fitBounds(window.L.latLngBounds(timedRoute), { padding: [70, 70] });
-      setMessage(`${String(hour).padStart(2, "0")}시 ${profile} 환경을 반영해 경로를 다시 계산했습니다.`);
-    }, 220);
-    return () => window.clearTimeout(timer);
-  }, [hour, anchors]);
   return <main>
     <header><b>〰 바닷길</b><span>24시간 환경 예측</span></header><div ref={mapNode} id="map" />
     <section className="controls"><div className="inputs"><input aria-label="출발지" value={start} onChange={e => setStart(e.target.value)} placeholder="출발지 입력" /><b>→</b><input aria-label="도착지" value={end} onChange={e => setEnd(e.target.value)} placeholder="도착지 입력" /><button onClick={findRoute} disabled={loading}>{loading ? "계산 중…" : "AI 최적 경로"}</button></div><p className="routeMessage">{message}</p><div className="buttons">{buttons.map(([k, icon, name]) => <button key={k} className={active.includes(k) ? "on" : ""} onClick={() => toggle(k)}><i>{icon}</i>{name}</button>)}</div></section>
