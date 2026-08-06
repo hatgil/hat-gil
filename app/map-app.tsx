@@ -53,8 +53,16 @@ export default function MapApp() {
   const resolvePlace = async (name: string): Promise<[number, number] | null> => {
     const presets: Record<string, [number, number]> = { "미포항": [35.1595,129.1707], "청사포다릿돌전망대": [35.1607,129.1907], "해운대역": [35.1631,129.1588], "달맞이길": [35.1642,129.1788] };
     const compact = name.replaceAll(" ", ""); if (presets[compact]) return presets[compact];
-    const result = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=kr&q=${encodeURIComponent(name + ", 부산")}`).then(r => r.json());
-    return result[0] ? [+result[0].lat, +result[0].lon] : null;
+    try {
+      const result = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=kr&viewbox=128.75,35.4,129.35,34.85&bounded=1&q=${encodeURIComponent("부산 " + name)}`).then(r => r.json());
+      if (result[0]) return [+result[0].lat, +result[0].lon];
+    } catch {}
+    try {
+      const photon = await fetch(`https://photon.komoot.io/api/?limit=1&lang=ko&q=${encodeURIComponent(name + " 부산")}`).then(r => r.json());
+      const coordinates = photon.features?.[0]?.geometry?.coordinates;
+      if (coordinates) return [+coordinates[1], +coordinates[0]];
+    } catch {}
+    return null;
   };
   const findRoute = async () => {
     if (!start.trim() || !end.trim()) return setMessage("출발지와 도착지를 모두 입력해 주세요.");
