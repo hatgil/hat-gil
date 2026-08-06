@@ -1,40 +1,16 @@
 "use client";
-
-import { useState } from "react";
-
-const routes = [
-  { name: "달맞이 고개 바람길", time: "36분", distance: "2.4km", score: 94, cool: "그늘 68% · 체감 27°", note: "해풍이 시원하게 불어요", points: "16,70 29,58 39,61 53,42 68,45 82,27" },
-  { name: "청사포 해안 산책길", time: "28분", distance: "1.8km", score: 82, cool: "그늘 42% · 체감 29°", note: "탁 트인 바다 풍경", points: "16,70 29,78 42,72 54,79 68,67 84,70" },
-  { name: "미포 조용한 골목길", time: "31분", distance: "2.1km", score: 76, cool: "그늘 55% · 체감 28°", note: "사람이 비교적 적어요", points: "16,70 28,49 43,51 55,58 67,52 82,54" },
-];
-const goals = ["가장 시원한 길", "가장 아름다운 풍경", "가장 조용한 길", "가족 산책", "운동 코스"];
-
-export default function Home() {
-  const [goal, setGoal] = useState(goals[0]);
-  const [layer, setLayer] = useState<"sun" | "wind" | "crowd" | null>("sun");
-  const [range, setRange] = useState(1);
-  const [selected, setSelected] = useState(0);
-  const r = routes[selected];
-  return <main className="app-shell">
-    <header><div className="brand"><span>〰</span><div><b>바닷길</b><small>BUSAN COAST WALK</small></div></div><div className="weather"><span>☀</span><b>29°</b><small>해운대 · 맑음</small></div></header>
-    <section className="intro"><div><p>오늘, 어떤 걸음이 필요하세요?</p><h1>바다와 날씨를 읽는<br/><em>부산 산책 경로</em></h1></div><div className="range"><b>해안 반경 <strong>{range}km</strong></b><input aria-label="해안 반경" type="range" min="1" max="5" value={range} onChange={e=>setRange(+e.target.value)}/><span>1km <i/> 5km</span></div></section>
-    <section className="goal-bar"><span>산책 목적</span>{goals.map(g=><button className={goal===g?"active":""} onClick={()=>{setGoal(g);setSelected(g==="가장 아름다운 풍경"?1:g==="가장 조용한 길"?2:0)}} key={g}>{g}</button>)}</section>
-    <section className="content">
-      <div className="map-panel">
-        <div className="map-head"><div><b>해운대 해안</b><span>미포항 ↔ 청사포</span></div><span className="live">● 실시간 환경 분석</span></div>
-        <div className="map" aria-label="부산 해안 지도">
-          <div className="sea-label">동해</div><div className="coast">해운대 해수욕장<br/><small>미포항</small></div><div className="blocks">▦　▤<br/>　▦　▥<br/>▥　　▦</div>
-          {routes.map((x,i)=><svg key={x.name} className={`route route-${i} ${i===selected?"chosen":""}`} viewBox="0 0 100 100" preserveAspectRatio="none" onClick={()=>setSelected(i)}><polyline points={x.points} /></svg>)}
-          <div className="pin start">출발</div><div className="pin end">도착</div>
-          {layer==="sun"&&<div className="shade"><span>☀</span><b>현재 그늘 구역</b><small>건물 그림자 · 68%</small></div>}
-          {layer==="wind"&&<div className="wind-layer"><i>➜</i><i>➜</i><i>➜</i><b>동남풍 4.2m/s</b></div>}
-          {layer==="crowd"&&<div className="crowd-layer"><i/><i/><i/><b>혼잡도 낮음</b></div>}
-          <div className="legend"><i className="blue"/>추천 <i className="orange"/>다른 경로</div>
-        </div>
-        <div className="layers"><button className={layer==="sun"?"on":""} onClick={()=>setLayer(layer==="sun"?null:"sun")}><span>☀</span>햇빛·그늘</button><button className={layer==="wind"?"on":""} onClick={()=>setLayer(layer==="wind"?null:"wind")}><span>≋</span>바람</button><button className={layer==="crowd"?"on":""} onClick={()=>setLayer(layer==="crowd"?null:"crowd")}><span>♟</span>혼잡도</button></div>
-      </div>
-      <aside><div className="recommend"><p>AI 맞춤 추천</p><h2>{r.name}</h2><div className="score"><b>{r.score}</b><span>쾌적 점수<br/><small>100점 만점</small></span></div><div className="stats"><span><b>{r.distance}</b>거리</span><span><b>{r.time}</b>예상 시간</span><span><b>낮음</b>혼잡도</span></div><div className="tip">✦ {r.note}<br/><small>{r.cool}</small></div><button className="start-btn">이 경로로 산책 시작</button></div><div className="route-list"><h3>비교 경로 <small>3개</small></h3>{routes.map((x,i)=><button onClick={()=>setSelected(i)} className={selected===i?"selected":""} key={x.name}><i>{i+1}</i><span><b>{x.name}</b><small>{x.distance} · {x.time} · {x.cool}</small></span><strong>{x.score}</strong></button>)}</div></aside>
-    </section>
-    <footer><span>☀ 그늘은 현재 시각의 태양 위치와 주변 건물을 반영한 예측값입니다.</span><span>데이터 기준: 기상청 · 공공데이터포털 · 도로 정보</span></footer>
-  </main>;
-}
+import {useEffect,useRef,useState} from "react";
+declare global {interface Window {naver?:any}}
+type Goal="산책"|"운동"|"시원한 길"; type Layer="uv"|"wind"|"fog"|"crowd"|"facility"|"shade"|"temp"|null;
+const ENV=[['uv','☀','자외선'],['wind','≋','해풍·빌딩풍'],['fog','〰','해무'],['crowd','♟','사람 밀집도'],['facility','⌂','시설물'],['shade','◐','건물 그늘'],['temp','♨','위치별 온도']] as const;
+const GOAL:{[key in Goal]:{desc:string;score:number;time:string;dist:string;path:[number,number][]}}={
+  산책:{desc:'그늘·낮은 밀집도·해무 영향이 적은 길',score:94,time:'36분',dist:'2.6km',path:[[35.1592,129.1708],[35.1607,129.1732],[35.1615,129.1756],[35.1630,129.1774]]},
+  운동:{desc:'완만한 오르막·순풍·운동 강도를 반영한 길',score:91,time:'43분',dist:'3.2km',path:[[35.1592,129.1708],[35.1618,129.1713],[35.1632,129.1746],[35.1630,129.1774]]},
+  '시원한 길':{desc:'건물 그늘·해풍·낮은 체감온도를 우선한 길',score:97,time:'39분',dist:'2.8km',path:[[35.1592,129.1708],[35.1608,129.1720],[35.1625,129.1738],[35.1630,129.1774]]}
+};
+function sea(v:string){return /바다|해수욕장|해변|동해|바닷가|해안|해상/.test(v)}
+export default function Home(){const [goal,setGoal]=useState<Goal>('산책'),[layer,setLayer]=useState<Layer>(null),[start,setStart]=useState('미포항'),[end,setEnd]=useState('청사포 다릿돌전망대'),[notice,setNotice]=useState(''),[key,setKey]=useState(''),[mapReady,setMapReady]=useState(false);const mapEl=useRef<HTMLDivElement>(null),map=useRef<any>();const d=GOAL[goal];
+ const route=()=>{if(!start||!end)return setNotice('출발지와 도착지를 입력해 주세요.');if(sea(end))return setNotice('도착지는 바다 위가 아닌 육지의 장소로 입력해 주세요. 예: 청사포 다릿돌전망대');setNotice(`${goal} 목적의 AI 최적 경로를 지도에 표시했어요.`)};
+ useEffect(()=>{if(!key||!mapEl.current)return;const id='naver-map-sdk';const init=()=>{if(!window.naver||!mapEl.current)return;map.current=new window.naver.maps.Map(mapEl.current,{center:new window.naver.maps.LatLng(35.1614,129.1742),zoom:15});setMapReady(true)};let s=document.getElementById(id) as HTMLScriptElement|null;if(s){s.addEventListener('load',init);if(window.naver)init();return()=>s?.removeEventListener('load',init)}s=document.createElement('script');s.id=id;s.src=`https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${key}`;s.async=true;s.onload=init;document.head.appendChild(s)},[key]);
+ useEffect(()=>{if(!map.current||!window.naver)return;const n=window.naver;new n.maps.Polyline({map:map.current,path:d.path.map(p=>new n.maps.LatLng(p[0],p[1])),strokeColor:'#087f9d',strokeWeight:6,strokeOpacity:.9});},[goal,mapReady]);
+ return <main><header><div className="brand">〰 <b>바닷길</b><small>BUSAN COAST ROUTE</small></div><button className="key" onClick={()=>document.getElementById('keybox')?.classList.toggle('show')}>네이버 지도 연결</button></header><div id="keybox" className="keybox"><label>네이버 지도 Client ID (ncpKeyId)<input value={key} onChange={e=>setKey(e.target.value.trim())} placeholder="발급받은 키 입력"/></label><small>키를 입력하면 실제 네이버 지도가 바로 표시됩니다.</small></div><section className="mapstage"><div className="maptitle"><b>{start} → {end}</b><span>AI 환경 최적화 경로</span></div><div ref={mapEl} className={mapReady?'navermap':'fallback'}>{!mapReady&&<><div className="ocean">동해</div><div className="coast">해운대 · 미포항<br/><small>청사포 방향</small></div><div className="city">▦　▤<br/>　▦　▥<br/>▥　　▦</div><svg viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points={goal==='산책'?'15,76 32,62 43,67 58,50 72,54 85,35':goal==='운동'?'15,76 27,51 43,58 59,32 70,46 85,35':'15,76 25,56 40,59 55,42 69,46 85,35'}/></svg><b className="pin p1">출발</b><b className="pin p2">도착</b></>}{layer&&<div className={`overlay ${layer}`}><i>{ENV.find(x=>x[0]===layer)?.[1]}</i><b>{layer==='uv'?'자외선 강함 · UV 7 / 남중고도 63°':layer==='wind'?'남동 해풍 4.2m/s · 빌딩풍 주의':layer==='fog'?'해무 영향 낮음 · 시야 8km':layer==='crowd'?'혼잡도 낮음 · 32명/100m':layer==='facility'?'화장실·쉼터·편의점 위치':layer==='shade'?'건물 그늘 61% · 그늘 체감 27°':'해안가 28° · 그늘 27°'}</b><small>현재 선택한 환경 정보</small></div>}</div><div className="toolbar">{ENV.map(([id,icon,name])=><button key={id} className={layer===id?'on':''} onClick={()=>setLayer(layer===id?null:id)}><i>{icon}</i>{name}</button>)}</div></section><section className="controls"><div className="places"><label>출발지<input value={start} onChange={e=>setStart(e.target.value)} placeholder="예: 미포항"/></label><span>→</span><label>도착지<input value={end} onChange={e=>setEnd(e.target.value)} placeholder="예: 청사포 다릿돌전망대"/></label><button onClick={route}>경로 찾기</button></div>{notice&&<p className="notice">{notice}</p>}<div className="goals">{(Object.keys(GOAL) as Goal[]).map((g,i)=><button className={goal===g?'selected':''} onClick={()=>{setGoal(g);setNotice('')}} key={g}><i>{['♧','◴','❄'][i]}</i><b>{g}</b><small>{GOAL[g].desc}</small></button>)}</div></section><section className="result"><div><p>AI 추천 결과 · {goal}</p><h1>{d.desc}</h1><div className="metric"><b>{d.score}</b><span>최적화 점수<br/><small>환경 데이터 종합</small></span><span><strong>{d.dist}</strong>추천 거리</span><span><strong>{d.time}</strong>예상 이동 시간</span></div></div><div className="rule"><b>선정 기준</b><span>{goal==='산책'?'그늘 40% 이상 · 혼잡도 낮음 · 해무 영향 낮음':goal==='운동'?'경사도 · 바람 방향 · 운동 강도':'건물 그늘 · 해풍 · 낮은 체감온도'}</span></div></section><footer>기상청 API와 환경·시설물 데이터 연결 전에는 시연용 환경값을 보여줍니다. 실제 API 키 연결 후 자동으로 현재값으로 갱신됩니다.</footer></main>}
