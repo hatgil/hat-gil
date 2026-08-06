@@ -21,7 +21,7 @@ export default function MapApp() {
   const [start, setStart] = useState("미포항"), [end, setEnd] = useState("청사포 다릿돌전망대"), [route, setRoute] = useState<number[][]>(routes.cool.map(x => [...x])), [message, setMessage] = useState("장소를 입력하고 AI 최적 경로를 눌러 주세요."), [loading, setLoading] = useState(false);
   const [anchors, setAnchors] = useState<[[number, number], [number, number]] | null>(null);
   const uv = Math.max(0, 8 - Math.abs(hour - 13) * 2), temp = Math.round(23 + 7 * Math.sin((hour - 7) / 24 * Math.PI * 2));
-  const fog = Math.max(12, Math.round(72 - 3 * hour + 18 * Math.cos(hour / 3))), crowd = hour >= 17 && hour <= 21 ? 76 : hour >= 11 && hour <= 16 ? 55 : 28;
+  const fog = Math.max(12, Math.round(72 - 3 * hour + 18 * Math.cos(hour / 3))), crowd = hour >= 17 && hour <= 21 ? 76 : hour >= 11 && hour <= 15 ? 55 : 28;
 
   useEffect(() => {
     const init = () => { const L = window.L; if (!L || !mapNode.current) return; map.current = L.map(mapNode.current).setView([35.160, 129.180], 14); L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current); };
@@ -62,9 +62,20 @@ export default function MapApp() {
   };
   const calculateTimedRoute = async (from: [number, number], to: [number, number], targetHour: number) => {
     const latSpan = to[0] - from[0], lonSpan = to[1] - from[1], length = Math.max(.0001, Math.hypot(latSpan, lonSpan));
-    const bandOffset = targetHour < 6 || targetHour >= 20 ? -.0032 : targetHour >= 11 && targetHour <= 16 ? .0038 : .0013;
+    const isNight = targetHour < 6 || targetHour >= 20, isShadeWind = targetHour >= 11 && targetHour <= 15;
+    const sunlight = Math.max(0, Math.sin((targetHour - 6) / 13 * Math.PI)), seaBreeze = 2.1 + targetHour * .13;
+    const crowdLoad = targetHour >= 17 && targetHour <= 21 ? 76 : isShadeWind ? 55 : 28;
+    const hourlyPulse = Math.sin((targetHour + 1) * Math.PI / 6);
+    const profileOffset = isNight ? -.0032 : isShadeWind ? .0038 : .0013;
+    const environmentOffset = isNight
+      ? -(1 - crowdLoad / 100) * .0005 + hourlyPulse * .00022
+      : isShadeWind
+        ? sunlight * .00065 + (seaBreeze - 2.1) * .00005 + hourlyPulse * .00016
+        : (sunlight - .45) * .00042 - crowdLoad * .000002 + hourlyPulse * .0002;
+    const bandOffset = profileOffset + environmentOffset;
     const perpLat = -lonSpan / length * bandOffset, perpLon = latSpan / length * bandOffset;
-    const via: [number, number] = [(from[0] + to[0]) / 2 + perpLat, (from[1] + to[1]) / 2 + perpLon];
+    const viaRatio = .48 + .045 * Math.sin(targetHour * Math.PI / 12);
+    const via: [number, number] = [from[0] + latSpan * viaRatio + perpLat, from[1] + lonSpan * viaRatio + perpLon];
     let next: number[][] = [from, via, to];
     try { const coords = `${from[1]},${from[0]};${via[1]},${via[0]};${to[1]},${to[0]}`; const result = await fetch(`https://routing.openstreetmap.de/routed-foot/route/v1/driving/${coords}?overview=full&geometries=geojson`).then(r => r.json()); if (result.routes?.[0]?.geometry?.coordinates) next = result.routes[0].geometry.coordinates.map((p: number[]) => [p[1], p[0]]); } catch {}
     return next;
@@ -81,14 +92,14 @@ export default function MapApp() {
   };
   useEffect(() => {
     if (!anchors) return; let cancelled = false;
-    const timer = window.setTimeout(async () => { const next = await calculateTimedRoute(anchors[0], anchors[1], hour); if (cancelled) return; setRoute(next); map.current?.fitBounds(window.L.latLngBounds(next), { padding: [70, 70] }); const profile = hour < 6 || hour >= 20 ? "야간 안전" : hour >= 11 && hour <= 16 ? "그늘·해풍" : "쾌적 균형"; setMessage(`${String(hour).padStart(2, "0")}시 ${profile} 경로로 다시 계산했습니다.`); }, 280);
+    const timer = window.setTimeout(async () => { const next = await calculateTimedRoute(anchors[0], anchors[1], hour); if (cancelled) return; setRoute(next); map.current?.fitBounds(window.L.latLngBounds(next), { padding: [70, 70] }); const profile = hour < 6 || hour >= 20 ? "야간 안전" : hour >= 11 && hour <= 15 ? "그늘·해풍" : "쾌적 균형"; setMessage(`${String(hour).padStart(2, "0")}시 ${profile} 경로로 다시 계산했습니다.`); }, 280);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [hour, anchors]);
   return <main>
     <header><b>〰 바닷길</b><span>24시간 환경 예측</span></header><div ref={mapNode} id="map" />
     <section className="controls"><div className="inputs"><input aria-label="출발지" value={start} onChange={e => setStart(e.target.value)} placeholder="출발지 입력" /><b>→</b><input aria-label="도착지" value={end} onChange={e => setEnd(e.target.value)} placeholder="도착지 입력" /><button onClick={findRoute} disabled={loading}>{loading ? "계산 중…" : "AI 최적 경로"}</button></div><p className="routeMessage">{message}</p><div className="buttons">{buttons.map(([k, icon, name]) => <button key={k} className={active.includes(k) ? "on" : ""} onClick={() => toggle(k)}><i>{icon}</i>{name}</button>)}</div></section>
     {panelOpen ? <aside><button className="panelClose" aria-label="시간대별 예측 최소화" onClick={() => setPanelOpen(false)}>×</button><b>시간대별 예측</b><input type="range" min="0" max="23" value={hour} onChange={e => setHour(+e.target.value)} /><strong>{String(hour).padStart(2,"0")}:00</strong><span>태양 고도 {hour>=6&&hour<=19 ? Math.max(4,63-Math.abs(hour-12)*9) : 0}°</span><div className="metrics"><p><i className="yellow"/>UV {uv}</p><p><i className="blue"/>해풍 {(2.1+hour*.13).toFixed(1)}m/s</p><p><i className="orange"/>빌딩풍 {(4.3+hour*.08).toFixed(1)}m/s</p><p><i className="cyan"/>해무 {fog}%</p><p><i className="pink"/>밀집도 {crowd}%</p><p><i className="red"/>온도 {temp}°</p></div></aside> : <button className="panelOpen" onClick={() => setPanelOpen(true)}>시간대별 예측 열기</button>}
-    <div className="routeInfo"><b>{hour<6||hour>=20 ? "야간 안전 경로" : hour>=11&&hour<=16 ? "그늘·해풍 우선 경로" : "쾌적 균형 경로"}</b><span>{hour}시 환경값을 반영해 추천 경로가 변경되었습니다.</span></div>
+    <div className="routeInfo"><b>{hour<6||hour>=20 ? "야간 안전 경로" : hour>=11&&hour<=15 ? "그늘·해풍 우선 경로" : "쾌적 균형 경로"}</b><span>{hour}시 환경값을 반영해 추천 경로가 변경되었습니다.</span></div>
     <div className="legend"><b>바람 색상</b><span><i className="blue"/>해풍</span><span><i className="orange"/>빌딩풍</span></div>
   </main>;
 }
