@@ -74,7 +74,7 @@ export default function MapApp() {
     const timer = window.setTimeout(() => {
       const [from, to] = anchors;
       const profile = hour < 6 || hour >= 20 ? "야간 안전" : hour >= 11 && hour <= 16 ? "그늘·해풍" : "쾌적 균형";
-      const bend = hour < 6 || hour >= 20 ? .00125 : hour >= 11 && hour <= 16 ? -.00165 : -.00045;
+      const bend = hour < 6 || hour >= 20 ? .0042 : hour >= 11 && hour <= 16 ? -.0045 : .0014;
       const latSpan = to[0] - from[0], lonSpan = to[1] - from[1];
       const timedRoute: number[][] = [
         from,
@@ -83,6 +83,7 @@ export default function MapApp() {
         to,
       ];
       setRoute(timedRoute);
+      map.current?.fitBounds(window.L.latLngBounds(timedRoute), { padding: [70, 70] });
       setMessage(`${String(hour).padStart(2, "0")}시 ${profile} 환경을 반영해 경로를 다시 계산했습니다.`);
     }, 220);
     return () => window.clearTimeout(timer);
