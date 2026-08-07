@@ -170,7 +170,7 @@ export default function DynamicMap() {
   }, []);
 
   useEffect(() => {
-    if (!mapReady || !map.current || !route.length) return;
+    if (!mapReady || !map.current) return;
     if (!pathHalo.current) pathHalo.current = window.L.polyline(routeRef.current, { color: "#ffffff", weight: 15, opacity: .92, interactive: false }).addTo(map.current);
     if (!path.current) path.current = window.L.polyline(routeRef.current, { color: profile.color, weight: 9, opacity: 1 }).addTo(map.current);
   }, [mapReady]);
@@ -180,7 +180,7 @@ export default function DynamicMap() {
   }, [profile.color]);
 
   useEffect(() => {
-    if (!mapReady || !map.current) return;
+    if (!mapReady || !map.current || !route.length) return;
     const visiblePoints = active.length && environmentPoints.length ? environmentPoints.map(item => item.point) : route;
     map.current.fitBounds(window.L.latLngBounds(visiblePoints), { padding: [55, 55] });
   }, [mapReady, route, environmentPoints, active.length]);
