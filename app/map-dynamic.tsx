@@ -224,6 +224,40 @@ const corridorPoints = (route: P[]) => {
   return [...unique.values()];
 };
 
+// 외부 지도 서버를 기다리는 동안에도 레이어와 대중교통 선택이 즉시 보이도록
+// 출발지~도착지 축을 따라 가벼운 미리보기 데이터를 먼저 만든다.
+const previewEnvironment = (anchors: [P, P]): EnvironmentData => {
+  const [from, to] = anchors;
+  const latSpan = to[0] - from[0], lonSpan = to[1] - from[1];
+  const span = Math.max(.0001, Math.hypot(latSpan, lonSpan));
+  const normal: P = [-lonSpan / span, latSpan / span];
+  const pointAt = (ratio: number, offset = 0): P => [
+    from[0] + latSpan * ratio + normal[0] * offset,
+    from[1] + lonSpan * ratio + normal[1] * offset,
+  ];
+  const rectangle = (center: P, size: number): P[] => [
+    [center[0] - size, center[1] - size * 1.25], [center[0] - size, center[1] + size * 1.25],
+    [center[0] + size, center[1] + size * 1.25], [center[0] + size, center[1] - size * 1.25],
+  ];
+  const buildings: Building[] = Array.from({ length: 30 }, (_, index) => {
+    const ratio = .04 + (index % 15) / 14 * .92;
+    const side = index < 15 ? 1 : -1;
+    const center = pointAt(ratio, side * (.00065 + (index % 3) * .00022));
+    return { id: `preview-building-${index}`, name: "주변 건물(불러오는 중)", polygon: rectangle(center, .00013 + index % 4 * .000025), height: 8 + index % 7 * 3 };
+  });
+  const places: Place[] = Array.from({ length: 14 }, (_, index) => ({
+    id: `preview-place-${index}`, name: `주변 시설 ${index + 1}`, category: index % 3 === 0 ? "휴식 시설" : index % 3 === 1 ? "생활 시설" : "보행 시설",
+    road: "경로 주변", point: pointAt(.06 + index / 13 * .88, (index % 2 ? 1 : -1) * .00125), seed: index * 11,
+  }));
+  const transitStops: TransitStop[] = [
+    { id: "preview-bus-start", name: "출발지 인근 정류장", point: pointAt(.07, .00025), kind: "bus" },
+    { id: "preview-bus-end", name: "도착지 인근 정류장", point: pointAt(.93, -.00025), kind: "bus" },
+    { id: "preview-subway-start", name: "출발지 인근 역", point: pointAt(.14, -.00045), kind: "subway" },
+    { id: "preview-subway-end", name: "도착지 인근 역", point: pointAt(.86, .00045), kind: "subway" },
+  ];
+  return { buildings, places, transitStops };
+};
+
 const parseHeight = (tags: Record<string, string> = {}) => {
   const explicit = Number.parseFloat(tags.height || "");
   if (Number.isFinite(explicit)) return clamp(explicit, 3, 100);
@@ -487,16 +521,21 @@ export default function DynamicMap() {
     let cached = environmentCache.current.get(key);
     if (!cached) {
       try {
-        const stored = window.sessionStorage.getItem(`geuneulon-env:${key}`);
+        const stored = window.sessionStorage.getItem(`geuneulon-env:${key}`) || window.localStorage.getItem(`geuneulon-env:${key}`);
         if (stored) { cached = JSON.parse(stored) as EnvironmentData; environmentCache.current.set(key, cached); }
       } catch { /* 저장 공간을 사용할 수 없으면 메모리 캐시만 사용 */ }
     }
     if (cached) { apply(cached, true); return () => controller.abort(); }
-    setFeatureStatus("건물·시설·대중교통 데이터를 미리 준비 중…");
+    apply(previewEnvironment(anchors));
+    setFeatureStatus("즉시 미리보기 표시 중 · 실제 건물·시설·정류장으로 자동 갱신");
     fetchEnvironmentFeatures(anchors, controller.signal).then(data => {
       if (controller.signal.aborted) return;
       environmentCache.current.set(key, data);
-      try { window.sessionStorage.setItem(`geuneulon-env:${key}`, JSON.stringify(data)); } catch { /* 큰 지도 데이터는 메모리 캐시로 유지 */ }
+      try {
+        const serialized = JSON.stringify(data);
+        window.sessionStorage.setItem(`geuneulon-env:${key}`, serialized);
+        window.localStorage.setItem(`geuneulon-env:${key}`, serialized);
+      } catch { /* 큰 지도 데이터는 메모리 캐시로 유지 */ }
       apply(data);
     }).catch(() => {
       if (!controller.signal.aborted) setFeatureStatus("지도 데이터 갱신이 지연됩니다. 기존 표시를 유지합니다.");

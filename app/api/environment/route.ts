@@ -12,19 +12,29 @@ const safeCoordinate = (value: string | null): P | null => {
 
 const requestOverpass = async (query: string) => {
   const endpoints = ["https://overpass.osm.ch/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass-api.de/api/interpreter"];
-  for (const endpoint of endpoints) {
+  const controllers: AbortController[] = [];
+  const requestOne = async (endpoint: string) => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6500);
+    controllers.push(controller);
+    const timeout = setTimeout(() => controller.abort(), 3000);
     try {
       const response = await fetch(endpoint, {
         method: "POST", body: `data=${encodeURIComponent(query)}`,
         headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, signal: controller.signal,
       });
-      if (response.ok) return await response.json() as { elements?: unknown[] };
-    } catch { /* 다음 미러로 빠르게 재시도 */ }
+      if (!response.ok) throw new Error("Overpass response failed");
+      return await response.json() as { elements?: unknown[] };
+    } catch (error) { throw error; }
     finally { clearTimeout(timeout); }
+  };
+  try {
+    const result = await Promise.any(endpoints.map(requestOne));
+    controllers.forEach(controller => controller.abort());
+    return result;
+  } catch {
+    controllers.forEach(controller => controller.abort());
+    return { elements: [] };
   }
-  return { elements: [] };
 };
 
 const loadEnvironment = async (from: P, to: P): Promise<Payload> => {
