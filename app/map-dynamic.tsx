@@ -144,6 +144,7 @@ export default function DynamicMap() {
   const routeRef = useRef<P[]>(route);
   const [active, setActive] = useState<K[]>(["wind", "shade"]), [hour, setHour] = useState(14);
   const [panel, setPanel] = useState(true), [status, setStatus] = useState("장소를 입력하고 경로 찾기를 누르세요."), [loading, setLoading] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(true), [routeCardOpen, setRouteCardOpen] = useState(true);
   const profile = profileForHour(hour);
   const uv = Math.max(0, 8 - Math.abs(hour - 13) * 2);
   const temp = Math.round(23 + 7 * Math.sin((hour - 7) / 24 * Math.PI * 2));
@@ -296,7 +297,7 @@ export default function DynamicMap() {
   const toggle = (kind: K) => setActive(active.includes(kind) ? active.filter(value => value !== kind) : [...active, kind]);
 
   return <main>
-    <header><b>그늘온</b><span>환경 반경 500m · 지도 범위 자유 조절</span></header>
+    <header><div className="brandBlock"><b>그늘온</b><small>그늘On, 온 데 그늘을 켜다</small></div><span>환경 반경 500m · 지도 범위 자유 조절</span></header>
     <div ref={node} id="map" />
     <section className="controls">
       <form className="inputs" onSubmit={search}>
@@ -305,10 +306,11 @@ export default function DynamicMap() {
         <input aria-label="도착지" value={end} onChange={event => setEnd(event.target.value)} placeholder="도착지" />
         <button disabled={loading}>{loading ? "계산 중…" : "경로 찾기"}</button>
       </form>
-      <div className="buttons">
+      {layersOpen ? <div className="buttons layerButtons">
+        <button type="button" className="boxMinimize" aria-label="환경 데이터 최소화" onClick={() => setLayersOpen(false)}>−</button>
         {tools.map(([kind, icon, name]) => <button type="button" key={kind} aria-pressed={active.includes(kind)} className={active.includes(kind) ? "on" : ""} onClick={() => toggle(kind)}><i>{icon}</i>{name}</button>)}
         <button type="button" aria-pressed={allLayersActive} className={`layerAll ${allLayersActive ? "on" : ""}`} onClick={() => setActive(allLayersActive ? [] : tools.map(([kind]) => kind))}>◎ 전체 레이어</button>
-      </div>
+      </div> : <button type="button" className="boxRestore layerRestore" onClick={() => setLayersOpen(true)}>환경 데이터 열기</button>}
       <p className="routeStatus">{status}</p>
     </section>
     {panel ? <aside>
@@ -318,7 +320,8 @@ export default function DynamicMap() {
       <strong>{String(hour).padStart(2, "0")}:00</strong><span>태양 고도 {hour >= 7 && hour <= 19 ? Math.max(4, 63 - Math.abs(hour - 12) * 9) : 0}°</span>
       <div className="metrics"><p><i className="yellow" />UV {uv}</p><p><i className="blue" />해풍 {(2.1 + hour * .13).toFixed(1)}</p><p><i className="orange" />빌딩풍 {(4.3 + hour * .08).toFixed(1)}</p><p><i className="cyan" />해무 {fog}%</p><p><i className="pink" />밀집도 {crowd}%</p><p><i className="red" />온도 {temp}°</p></div>
     </aside> : <button className="panelOpen" onClick={() => setPanel(true)}>시간대별 예측 열기</button>}
-    <div className={`routeInfo ${profile.key}`}>
+    {routeCardOpen ? <div className={`routeInfo ${profile.key}`}>
+      <button type="button" className="boxMinimize routeBoxMinimize" aria-label="시간대별 경로 최소화" onClick={() => setRouteCardOpen(false)}>−</button>
       <b>{profile.title}</b><span>{profile.detail}</span>
       <small>출발·도착 고정 · 환경 레이어는 경로 주변 500m 반경에서 함께 갱신</small>
       <div className="profileSchedule" aria-label="시간대별 추천 경로 구간">
@@ -328,7 +331,7 @@ export default function DynamicMap() {
         <span className={profile.key === "balanced" ? "current" : ""}>17~19 쾌적 균형</span>
         <span className={profile.key === "night" ? "current" : ""}>20~23 야간 안전</span>
       </div>
-    </div>
+    </div> : <button type="button" className="boxRestore routeInfoRestore" onClick={() => setRouteCardOpen(true)}>시간대별 경로 열기</button>}
     <div className="legend"><b>환경 표시 범위</b><span>점선 영역: 경로 주변 500m</span><span><i className="blue" />해풍</span><span><i className="orange" />빌딩풍</span></div>
   </main>;
 }
