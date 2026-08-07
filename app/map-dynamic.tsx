@@ -119,6 +119,7 @@ export default function DynamicMap() {
   const crowd = hour >= 17 && hour <= 19 ? 76 : hour >= 11 && hour <= 16 ? 55 : 28;
   const shadow = shadowVector(hour);
   const environmentPoints = useMemo(() => corridorPoints(route), [route]);
+  const allLayersActive = active.length === tools.length;
 
   useEffect(() => {
     const init = () => {
@@ -177,7 +178,7 @@ export default function DynamicMap() {
 
     if (active.length) {
       route.filter((_, index) => index % Math.max(1, Math.floor(route.length / 3)) === 0).slice(0, 4)
-        .forEach(point => add(L.circle(point, { radius: 1000, color: "#5d8d99", fillColor: "#dff4f2", fillOpacity: .025, opacity: .28, weight: 1, dashArray: "6 8", interactive: false })));
+        .forEach(point => add(L.circle(point, { radius: 1000, color: "#287b8c", fillColor: "#dff4f2", fillOpacity: .045, opacity: .75, weight: 2, dashArray: "9 7", interactive: false })));
     }
     if (active.includes("shade")) buildingPoints.forEach(({ point }, index) => {
       const width = .00018 + index % 3 * .00004;
@@ -225,7 +226,7 @@ export default function DynamicMap() {
   const toggle = (kind: K) => setActive(active.includes(kind) ? active.filter(value => value !== kind) : [...active, kind]);
 
   return <main>
-    <header><b>〰 바닷길</b><span>입력 장소 기반 경로</span></header>
+    <header><b>〰 바닷길</b><span>입력 장소 기반 · 환경 반경 1km</span></header>
     <div ref={node} id="map" />
     <section className="controls">
       <form className="inputs" onSubmit={search}>
@@ -234,7 +235,10 @@ export default function DynamicMap() {
         <input aria-label="도착지" value={end} onChange={event => setEnd(event.target.value)} placeholder="도착지" />
         <button disabled={loading}>{loading ? "계산 중…" : "경로 찾기"}</button>
       </form>
-      <div className="buttons">{tools.map(([kind, icon, name]) => <button type="button" key={kind} className={active.includes(kind) ? "on" : ""} onClick={() => toggle(kind)}><i>{icon}</i>{name}</button>)}</div>
+      <div className="buttons">
+        {tools.map(([kind, icon, name]) => <button type="button" key={kind} aria-pressed={active.includes(kind)} className={active.includes(kind) ? "on" : ""} onClick={() => toggle(kind)}><i>{icon}</i>{name}</button>)}
+        <button type="button" aria-pressed={allLayersActive} className={`layerAll ${allLayersActive ? "on" : ""}`} onClick={() => setActive(allLayersActive ? [] : tools.map(([kind]) => kind))}>◎ 전체 레이어</button>
+      </div>
       <p className="routeStatus">{status}</p>
     </section>
     {panel ? <aside>
@@ -247,6 +251,13 @@ export default function DynamicMap() {
     <div className={`routeInfo ${profile.key}`}>
       <b>{profile.title}</b><span>{profile.detail}</span>
       <small>출발·도착 고정 · 환경 레이어는 경로 주변 500m~1km까지 함께 갱신</small>
+      <div className="profileSchedule" aria-label="시간대별 추천 경로 구간">
+        <span className={profile.key === "night" ? "current" : ""}>00~06 야간 안전</span>
+        <span className={profile.key === "balanced" ? "current" : ""}>07~12 쾌적 균형</span>
+        <span className={profile.key === "shadeWind" ? "current" : ""}>13~16 그늘·해풍</span>
+        <span className={profile.key === "balanced" ? "current" : ""}>17~19 쾌적 균형</span>
+        <span className={profile.key === "night" ? "current" : ""}>20~23 야간 안전</span>
+      </div>
     </div>
     <div className="legend"><b>환경 표시 범위</b><span>점선 영역: 경로 주변 최대 1km</span><span><i className="blue" />해풍</span><span><i className="orange" />빌딩풍</span></div>
   </main>;
