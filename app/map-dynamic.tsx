@@ -388,9 +388,11 @@ export default function DynamicMap() {
 
   useEffect(() => {
     if (!mapReady || !map.current || !route.length || !fitOnNextRoute.current) return;
-    map.current.fitBounds(window.L.latLngBounds(route), { padding: [75, 75] });
+    const leftPadding = searchOpen || layersOpen || routeCardOpen ? 372 : 64;
+    const rightPadding = panel || legendOpen || selectedPlace || selectedFacility ? 346 : 64;
+    map.current.fitBounds(window.L.latLngBounds(route), { paddingTopLeft: [leftPadding, 80], paddingBottomRight: [rightPadding, 80] });
     fitOnNextRoute.current = false;
-  }, [mapReady, route]);
+  }, [mapReady, route, searchOpen, layersOpen, routeCardOpen, panel, legendOpen, selectedPlace, selectedFacility]);
 
   useEffect(() => {
     if (!mapReady || !map.current) return;
@@ -545,11 +547,6 @@ export default function DynamicMap() {
           <input aria-label="도착지" value={end} onChange={event => setEnd(event.target.value)} placeholder="도착지" />
           <button disabled={loading}>{loading ? "계산 중…" : "경로 찾기"}</button>
         </form>
-        <div className="roadviewActions" aria-label="카카오 로드뷰 확인">
-          <a href={kakaoRoadview(anchors[0])} target="_blank" rel="noreferrer">◉ 출발지 로드뷰</a>
-          <a href={kakaoRoadview(anchors[1])} target="_blank" rel="noreferrer">◉ 도착지 로드뷰</a>
-          <small>카카오맵 현장 사진으로 위치 확인</small>
-        </div>
         <p className="routeStatus" aria-live="polite">{status}</p>
       </div> : <button type="button" className="boxRestore searchRestore" onClick={() => setSearchOpen(true)}>장소 검색 열기</button>}
       {layersOpen ? <div className="buttons layerButtons">
@@ -577,7 +574,11 @@ export default function DynamicMap() {
         <p><i className="green" /><b>가시거리</b><strong>{(live.visibility / 1000).toFixed(1)}km</strong></p>
       </div>
       <div className="weatherSource"><b>{weather?.source || "예보 연결 확인 중"}</b><span>{weather?.sourceDetail || "잠시만 기다려 주세요"}</span><small>{weather ? `${formatClock(live.time)} 예보 · ${weather.fetchedAt} 조회` : ""}</small></div>
-    </aside> : <button className="panelOpen" onClick={() => setPanel(true)}>시간대별 예측 열기</button>}
+    </aside> : <div className="forecastMini">
+      <button type="button" onClick={() => setPanel(true)} aria-label="시간대별 예측 펼치기">시간 예측 펼치기</button>
+      <div className="miniRangeLabels"><span>00시</span><strong>{String(hour).padStart(2, "0")}:00</strong><span>23시</span></div>
+      <input aria-label="최소화된 시간 조절" type="range" min="0" max="23" value={hour} onInput={event => setHour(+event.currentTarget.value)} />
+    </div>}
 
     {routeCardOpen ? <div className={`routeInfo ${profile.key}`}>
       <button type="button" className="boxMinimize routeBoxMinimize" aria-label="시간대별 경로 최소화" onClick={() => setRouteCardOpen(false)}>−</button>
