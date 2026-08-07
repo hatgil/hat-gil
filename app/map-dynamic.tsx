@@ -47,7 +47,7 @@ const shadowVector = (hour: number) => {
   };
 };
 
-const optimizedRoute = (from: P, to: P, hour: number): P[] => {
+const routeWaypoints = (from: P, to: P, hour: number): P[] => {
   const profile = profileForHour(hour), shadow = shadowVector(hour);
   const latSpan = to[0] - from[0], lonSpan = to[1] - from[1];
   const length = Math.max(.0001, Math.hypot(latSpan, lonSpan));
@@ -74,13 +74,44 @@ const optimizedRoute = (from: P, to: P, hour: number): P[] => {
     from[1] + lonSpan * (.68 - ratioShift) + perpLon * bend * 1.05 + shadow.lon * shadeWeight * .72,
   ];
 
-  return Array.from({ length: 33 }, (_, index): P => {
-    const t = index / 32, u = 1 - t;
+  return [from, via1, via2, to];
+};
+
+const resampleRoute = (points: P[], count = 65): P[] => {
+  if (points.length < 2) return points;
+  const distances = [0];
+  for (let index = 1; index < points.length; index++) {
+    distances.push(distances[index - 1] + Math.hypot(points[index][0] - points[index - 1][0], points[index][1] - points[index - 1][1]));
+  }
+  const total = distances[distances.length - 1];
+  if (!total) return Array.from({ length: count }, () => points[0]);
+  return Array.from({ length: count }, (_, index): P => {
+    const target = total * index / (count - 1);
+    let segment = 1;
+    while (segment < distances.length - 1 && distances[segment] < target) segment++;
+    const startDistance = distances[segment - 1], endDistance = distances[segment];
+    const ratio = endDistance === startDistance ? 0 : (target - startDistance) / (endDistance - startDistance);
     return [
-      u ** 3 * from[0] + 3 * u ** 2 * t * via1[0] + 3 * u * t ** 2 * via2[0] + t ** 3 * to[0],
-      u ** 3 * from[1] + 3 * u ** 2 * t * via1[1] + 3 * u * t ** 2 * via2[1] + t ** 3 * to[1],
+      points[segment - 1][0] + (points[segment][0] - points[segment - 1][0]) * ratio,
+      points[segment - 1][1] + (points[segment][1] - points[segment - 1][1]) * ratio,
     ];
   });
+};
+
+const fetchWalkingRoute = async (from: P, to: P, hour: number, signal: AbortSignal): Promise<P[]> => {
+  const waypoints = routeWaypoints(from, to, hour);
+  const request = async (points: P[]) => {
+    const coordinates = points.map(point => `${point[1]},${point[0]}`).join(";");
+    const response = await fetch(`https://routing.openstreetmap.de/routed-foot/route/v1/driving/${coordinates}?overview=full&geometries=geojson`, { signal });
+    const result = await response.json();
+    const coordinatesOnFoot = result.routes?.[0]?.geometry?.coordinates;
+    return coordinatesOnFoot ? resampleRoute(coordinatesOnFoot.map((point: number[]): P => [point[1], point[0]])) : null;
+  };
+  const optimized = await request(waypoints);
+  if (optimized) return optimized;
+  const directWalking = await request([from, to]);
+  if (directWalking) return directWalking;
+  throw new Error("보도 경로를 불러오지 못했습니다.");
 };
 
 const corridorPoints = (route: P[]) => {
@@ -104,10 +135,11 @@ const corridorPoints = (route: P[]) => {
 export default function DynamicMap() {
   const node = useRef<HTMLDivElement>(null), map = useRef<any>(), path = useRef<any>(), pathHalo = useRef<any>();
   const marks = useRef<any[]>([]), env = useRef<any[]>([]), animationFrame = useRef<number>();
+  const routeCache = useRef<Map<string, P[]>>(new Map());
   const [mapReady, setMapReady] = useState(false);
   const [start, setStart] = useState("미포항"), [end, setEnd] = useState("청사포 다릿돌전망대");
   const [anchors, setAnchors] = useState<[P, P]>([known.미포항, known.청사포다릿돌전망대]);
-  const [route, setRoute] = useState<P[]>(() => optimizedRoute(known.미포항, known.청사포다릿돌전망대, 14));
+  const [route, setRoute] = useState<P[]>([]);
   const routeRef = useRef<P[]>(route);
   const [active, setActive] = useState<K[]>(["wind", "shade"]), [hour, setHour] = useState(14);
   const [panel, setPanel] = useState(true), [status, setStatus] = useState("장소를 입력하고 경로 찾기를 누르세요."), [loading, setLoading] = useState(false);
@@ -125,6 +157,7 @@ export default function DynamicMap() {
       const L = window.L;
       if (!L || !node.current || map.current) return;
       map.current = L.map(node.current).setView([35.16, 129.18], 14);
+      const windPane = map.current.createPane("windPane"); windPane.style.zIndex = "390"; windPane.style.pointerEvents = "none";
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current);
       setMapReady(true);
     };
@@ -137,7 +170,7 @@ export default function DynamicMap() {
   }, []);
 
   useEffect(() => {
-    if (!mapReady || !map.current) return;
+    if (!mapReady || !map.current || !route.length) return;
     if (!pathHalo.current) pathHalo.current = window.L.polyline(routeRef.current, { color: "#ffffff", weight: 15, opacity: .92, interactive: false }).addTo(map.current);
     if (!path.current) path.current = window.L.polyline(routeRef.current, { color: profile.color, weight: 9, opacity: 1 }).addTo(map.current);
   }, [mapReady]);
@@ -163,26 +196,41 @@ export default function DynamicMap() {
   }, [mapReady, anchors]);
 
   useEffect(() => {
-    if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current);
-    const nextRoute = optimizedRoute(anchors[0], anchors[1], hour);
-    const previousRoute = routeRef.current.length === nextRoute.length ? routeRef.current : nextRoute;
-    const startedAt = performance.now();
-    setStatus(`${String(hour).padStart(2, "0")}시 ${profile.title}로 즉시 전환했습니다.`);
-    const animate = (now: number) => {
-      const progress = Math.min(1, (now - startedAt) / 140);
-      const eased = progress * progress * (3 - 2 * progress);
-      const currentRoute = nextRoute.map((point, index): P => [
-        previousRoute[index][0] + (point[0] - previousRoute[index][0]) * eased,
-        previousRoute[index][1] + (point[1] - previousRoute[index][1]) * eased,
-      ]);
-      routeRef.current = currentRoute;
-      pathHalo.current?.setLatLngs(currentRoute);
-      path.current?.setLatLngs(currentRoute);
-      if (progress < 1) animationFrame.current = window.requestAnimationFrame(animate);
-      else { routeRef.current = nextRoute; setRoute(nextRoute); setLoading(false); }
+    const controller = new AbortController();
+    const key = `${anchors[0].join(",")}:${anchors[1].join(",")}:${hour}`;
+    const applyWalkingRoute = (nextRoute: P[]) => {
+      if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current);
+      const previousRoute = routeRef.current.length > 1 ? resampleRoute(routeRef.current, nextRoute.length) : nextRoute;
+      const startedAt = performance.now();
+      const animate = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / 180);
+        const eased = progress * progress * (3 - 2 * progress);
+        const currentRoute = nextRoute.map((point, index): P => [
+          previousRoute[index][0] + (point[0] - previousRoute[index][0]) * eased,
+          previousRoute[index][1] + (point[1] - previousRoute[index][1]) * eased,
+        ]);
+        routeRef.current = currentRoute;
+        pathHalo.current?.setLatLngs(currentRoute);
+        path.current?.setLatLngs(currentRoute);
+        if (progress < 1) animationFrame.current = window.requestAnimationFrame(animate);
+        else { routeRef.current = nextRoute; setRoute(nextRoute); }
+      };
+      animationFrame.current = window.requestAnimationFrame(animate);
+      setStatus(`${String(hour).padStart(2, "0")}시 ${profile.title}를 보도 경로에 맞춰 표시했습니다.`);
     };
-    animationFrame.current = window.requestAnimationFrame(animate);
-    return () => { if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current); };
+    const timer = window.setTimeout(async () => {
+      const cached = routeCache.current.get(key);
+      if (cached) return applyWalkingRoute(cached);
+      setStatus(`${String(hour).padStart(2, "0")}시 보도 기반 ${profile.title}를 계산 중입니다…`);
+      try {
+        const nextRoute = await fetchWalkingRoute(anchors[0], anchors[1], hour, controller.signal);
+        if (controller.signal.aborted) return;
+        routeCache.current.set(key, nextRoute); applyWalkingRoute(nextRoute);
+      } catch (error) {
+        if (!controller.signal.aborted) setStatus(error instanceof Error ? error.message : "보도 경로 계산에 실패했습니다.");
+      }
+    }, 90);
+    return () => { controller.abort(); window.clearTimeout(timer); if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current); };
   }, [anchors, hour, profile.title]);
 
   useEffect(() => {
@@ -192,6 +240,7 @@ export default function DynamicMap() {
     const buildingPoints = environmentPoints.filter((_, index) => index % 2 === 0);
     const generalPoints = environmentPoints.filter((_, index) => index % 4 === 0);
     const sparsePoints = environmentPoints.filter((_, index) => index % 7 === 0);
+    const windPoints = environmentPoints.filter((_, index) => index % 11 === 0);
 
     if (active.length) {
       route.filter((_, index) => index % Math.max(1, Math.floor(route.length / 3)) === 0).slice(0, 4)
@@ -205,11 +254,11 @@ export default function DynamicMap() {
       ], { color: "#42208e", fillColor: "#7148d7", fillOpacity: hour >= 7 && hour <= 19 ? .4 : .18, weight: 3, dashArray: "6 3" }));
     });
     if (active.includes("fog")) sparsePoints.forEach(({ point, ring }) => add(L.circle(point, { radius: ring ? 220 : 185, color: "#087f9d", fillColor: "#9de3ec", fillOpacity: fog / 165 + .12, weight: 3, dashArray: "10 6" })));
-    if (active.includes("wind")) generalPoints.forEach(({ point, seed }) => {
+    if (active.includes("wind")) windPoints.forEach(({ point, seed }) => {
       const sea = 2.1 + hour * .13, building = 4.3 + seed % 3 + hour * .08;
       const waves = (className: string, direction: number, speed: number, duration: number) => `<div class="windMotion ${className}" style="--dir:${direction}deg;--dur:${duration}s"><span>≋</span><span>≋</span><span>≋</span><small>${speed.toFixed(1)}m/s</small></div>`;
-      add(L.marker([point[0] + .00045, point[1] - .00045], { icon: L.divIcon({ className: "windAnchor", html: waves("seaFlow", (110 + hour * 13) % 360, sea, Math.max(.45, 1.8 - sea * .15)) }) }));
-      add(L.marker([point[0] - .00045, point[1] + .00045], { icon: L.divIcon({ className: "windAnchor", html: waves("buildingFlow", (35 + hour * 17 + seed * 19) % 360, building, Math.max(.28, 1.6 - building * .14)) }) }));
+      add(L.marker([point[0] + .00045, point[1] - .00045], { pane: "windPane", interactive: false, icon: L.divIcon({ className: "windAnchor", html: waves("seaFlow", (110 + hour * 13) % 360, sea, Math.max(.45, 1.8 - sea * .15)) }) }));
+      add(L.marker([point[0] - .00045, point[1] + .00045], { pane: "windPane", interactive: false, icon: L.divIcon({ className: "windAnchor", html: waves("buildingFlow", (35 + hour * 17 + seed * 19) % 360, building, Math.max(.28, 1.6 - building * .14)) }) }));
     });
     if (active.includes("uv")) generalPoints.forEach(({ point, ring }) => add(L.circle(point, { radius: ring ? 180 : 150, color: "#e37d00", fillColor: "#ffd438", fillOpacity: uv / 24 + .1, weight: 3 })));
     if (active.includes("crowd")) generalPoints.forEach(({ point, seed }) => add(L.marker(point, { icon: L.divIcon({ className: "crowdMark", html: `♟<b style="font-size:${18 + crowd / 5 + seed % 5}px">♟</b>` }) })));
