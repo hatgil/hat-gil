@@ -48,6 +48,7 @@ type Place = {
 };
 type TransitStop = { id: string; name: string; point: P; kind: "bus" | "subway"; ref?: string };
 type TransitPlan = { kind: "bus" | "subway"; startStop: TransitStop; endStop: TransitStop; minutes: number; walkMinutes: number; rideMinutes: number; distanceKm: number };
+type EnvironmentData = { buildings: Building[]; places: Place[]; transitStops: TransitStop[] };
 
 const layerTools: [K, string, string][] = [
   ["uv", "☀", "자외선"], ["wind", "≋", "해풍·빌딩풍"], ["fog", "〰", "해무"],
@@ -261,11 +262,9 @@ const crowdScore = (place: Place, hour: number) => {
   return clamp(28 + peak + category + place.seed % 17, 8, 96);
 };
 
-const fetchEnvironmentFeatures = async (route: P[], signal: AbortSignal): Promise<{ buildings: Building[]; places: Place[]; transitStops: TransitStop[] }> => {
-  if (!route.length) return { buildings: [], places: [], transitStops: [] };
-  const samples = [route[0], route[Math.floor(route.length / 2)], route[route.length - 1]];
-  const ends = [route[0], route[route.length - 1]];
-  const response = await fetch("/api/environment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ samples, ends }), signal });
+const fetchEnvironmentFeatures = async (anchors: [P, P], signal: AbortSignal): Promise<EnvironmentData> => {
+  const params = new URLSearchParams({ from: anchors[0].join(","), to: anchors[1].join(",") });
+  const response = await fetch(`/api/environment?${params}`, { signal });
   if (!response.ok) throw new Error("주변 지도 데이터 연결에 실패했습니다.");
   const payload = await response.json();
   const buildingPayload: any = { elements: payload.buildings || [] };
@@ -366,6 +365,7 @@ export default function DynamicMap() {
   const node = useRef<HTMLDivElement>(null), map = useRef<any>(), path = useRef<any>(), pathHalo = useRef<any>();
   const marks = useRef<any[]>([]), env = useRef<any[]>([]), transitLayers = useRef<any[]>([]), animationFrame = useRef<number>();
   const routeCache = useRef<Map<string, P[]>>(new Map());
+  const environmentCache = useRef<Map<string, EnvironmentData>>(new Map());
   const fitOnNextRoute = useRef(true);
   const [mapReady, setMapReady] = useState(false);
   const [start, setStart] = useState("미포항"), [end, setEnd] = useState("청사포 다릿돌전망대");
@@ -407,7 +407,7 @@ export default function DynamicMap() {
     const init = () => {
       const L = window.L;
       if (!L || !node.current || map.current) return;
-      map.current = L.map(node.current, { zoomControl: true, scrollWheelZoom: true, dragging: true, doubleClickZoom: true, touchZoom: true }).setView([35.16, 129.18], 14);
+      map.current = L.map(node.current, { zoomControl: true, scrollWheelZoom: true, dragging: true, doubleClickZoom: true, touchZoom: true, preferCanvas: true }).setView([35.16, 129.18], 14);
       const windPane = map.current.createPane("windPane"); windPane.style.zIndex = "390"; windPane.style.pointerEvents = "none";
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current);
       setMapReady(true);
@@ -478,18 +478,31 @@ export default function DynamicMap() {
   }, [anchors, hour, profile.title]);
 
   useEffect(() => {
-    if (!route.length) return;
     const controller = new AbortController();
-    setFeatureStatus("실제 건물·시설 확인 중…");
-    fetchEnvironmentFeatures(route, controller.signal).then(data => {
-      if (controller.signal.aborted) return;
+    const key = anchors.flat().map(value => value.toFixed(4)).join(":");
+    const apply = (data: EnvironmentData, cached = false) => {
       setBuildings(data.buildings); setPlaces(data.places); setTransitStops(data.transitStops);
-      setFeatureStatus(`실제 건물 ${data.buildings.length}곳 · 시설 ${data.places.length}곳 · 정류장·역 ${data.transitStops.length}곳 확인`);
+      setFeatureStatus(`${cached ? "즉시 불러옴 · " : ""}실제 건물 ${data.buildings.length}곳 · 시설 ${data.places.length}곳 · 정류장·역 ${data.transitStops.length}곳`);
+    };
+    let cached = environmentCache.current.get(key);
+    if (!cached) {
+      try {
+        const stored = window.sessionStorage.getItem(`geuneulon-env:${key}`);
+        if (stored) { cached = JSON.parse(stored) as EnvironmentData; environmentCache.current.set(key, cached); }
+      } catch { /* 저장 공간을 사용할 수 없으면 메모리 캐시만 사용 */ }
+    }
+    if (cached) { apply(cached, true); return () => controller.abort(); }
+    setFeatureStatus("건물·시설·대중교통 데이터를 미리 준비 중…");
+    fetchEnvironmentFeatures(anchors, controller.signal).then(data => {
+      if (controller.signal.aborted) return;
+      environmentCache.current.set(key, data);
+      try { window.sessionStorage.setItem(`geuneulon-env:${key}`, JSON.stringify(data)); } catch { /* 큰 지도 데이터는 메모리 캐시로 유지 */ }
+      apply(data);
     }).catch(() => {
-      if (!controller.signal.aborted) { setBuildings([]); setPlaces([]); setTransitStops([]); setFeatureStatus("지도 데이터 연결 지연 · 잠시 후 다시 계산해 주세요"); }
+      if (!controller.signal.aborted) setFeatureStatus("지도 데이터 갱신이 지연됩니다. 기존 표시를 유지합니다.");
     });
     return () => controller.abort();
-  }, [route]);
+  }, [anchors]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -566,21 +579,22 @@ export default function DynamicMap() {
     if (!mapReady || !map.current || !selectedTransitPlan) return;
     const controller = new AbortController(), L = window.L;
     const add = (layer: any) => transitLayers.current.push(layer.addTo(map.current));
+    const color = selectedTransitPlan.kind === "bus" ? "#1178c4" : "#7a39b8";
+    const accessLine = L.polyline([anchors[0], selectedTransitPlan.startStop.point], { color: "#263f47", weight: 6, opacity: .9, dashArray: "6 6" });
+    const transitHalo = L.polyline([selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point], { color: "#ffffff", weight: 13, opacity: .92 });
+    const transitLine = L.polyline([selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point], { color, weight: 8, opacity: .96, dashArray: selectedTransitPlan.kind === "subway" ? "12 7" : undefined });
+    const egressLine = L.polyline([selectedTransitPlan.endStop.point, anchors[1]], { color: "#263f47", weight: 6, opacity: .9, dashArray: "6 6" });
+    add(accessLine); add(transitHalo); add(transitLine); add(egressLine);
+    const icon = (label: string, className: string) => L.divIcon({ className: `transitStop ${className}`, html: `<b>${label}</b>` });
+    add(L.marker(selectedTransitPlan.startStop.point, { icon: icon(selectedTransitPlan.kind === "bus" ? "BUS" : "SUB", selectedTransitPlan.kind) }).bindTooltip(`승차 · ${selectedTransitPlan.startStop.name}`, { direction: "top" }));
+    add(L.marker(selectedTransitPlan.endStop.point, { icon: icon("하차", selectedTransitPlan.kind) }).bindTooltip(`하차 · ${selectedTransitPlan.endStop.name}`, { direction: "top" }));
     Promise.all([
       fetchNetworkSegment(anchors[0], selectedTransitPlan.startStop.point, "foot", controller.signal),
-      selectedTransitPlan.kind === "bus" ? fetchNetworkSegment(selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point, "car", controller.signal) : Promise.resolve([selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point]),
+      selectedTransitPlan.kind === "bus" ? fetchNetworkSegment(selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point, "car", controller.signal) : Promise.resolve([selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point] as P[]),
       fetchNetworkSegment(selectedTransitPlan.endStop.point, anchors[1], "foot", controller.signal),
     ]).then(([access, transit, egress]) => {
       if (controller.signal.aborted) return;
-      const color = selectedTransitPlan.kind === "bus" ? "#1178c4" : "#7a39b8";
-      add(L.polyline(access, { color: "#263f47", weight: 6, opacity: .9, dashArray: "6 6" }));
-      add(L.polyline(transit, { color: "#ffffff", weight: 13, opacity: .92 }));
-      add(L.polyline(transit, { color, weight: 8, opacity: .96, dashArray: selectedTransitPlan.kind === "subway" ? "12 7" : undefined }));
-      add(L.polyline(egress, { color: "#263f47", weight: 6, opacity: .9, dashArray: "6 6" }));
-      const icon = (label: string, className: string) => L.divIcon({ className: `transitStop ${className}`, html: `<b>${label}</b>` });
-      add(L.marker(selectedTransitPlan.startStop.point, { icon: icon(selectedTransitPlan.kind === "bus" ? "BUS" : "SUB", selectedTransitPlan.kind) }).bindTooltip(`승차 · ${selectedTransitPlan.startStop.name}`, { direction: "top" }));
-      add(L.marker(selectedTransitPlan.endStop.point, { icon: icon("하차", selectedTransitPlan.kind) }).bindTooltip(`하차 · ${selectedTransitPlan.endStop.name}`, { direction: "top" }));
-      pathHalo.current?.bringToFront(); path.current?.bringToFront();
+      accessLine.setLatLngs(access); transitHalo.setLatLngs(transit); transitLine.setLatLngs(transit); egressLine.setLatLngs(egress);
     }).catch(() => undefined);
     return () => controller.abort();
   }, [mapReady, selectedTransitPlan, anchors]);
