@@ -38,11 +38,14 @@ const requestOverpass = async (query: string) => {
 };
 
 const loadEnvironment = async (from: P, to: P): Promise<Payload> => {
-  const middle: P = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
-  const samples = [from, middle, to], ends = [from, to];
+  // 출발지와 도착지 사이를 고르게 나눠 경로 전 구간의 500m 주변을 조회한다.
+  const samples: P[] = Array.from({ length: 7 }, (_, index) => {
+    const ratio = index / 6;
+    return [from[0] + (to[0] - from[0]) * ratio, from[1] + (to[1] - from[1]) * ratio];
+  });
   const around = (points: P[], filter: string, radius: number) => points.map(point => `${filter}(around:${radius},${point[0]},${point[1]});`).join("");
-  const buildingQuery = `[out:json][timeout:12];(${around(samples, 'way["building"]', 430)});out tags geom;`;
-  const placeQuery = `[out:json][timeout:12];(${around(samples, 'nwr["name"]["amenity"]', 520)}${around(samples, 'nwr["name"]["tourism"]', 520)}${around(samples, 'nwr["name"]["leisure"]', 520)}${around(samples, 'nwr["name"]["shop"]', 520)}${around(ends, 'nwr["highway"="bus_stop"]', 1400)}${around(ends, 'nwr["railway"="station"]', 2600)}${around(ends, 'nwr["station"="subway"]', 2600)});out tags center;`;
+  const buildingQuery = `[out:json][timeout:12];(${around(samples, 'way["building"]', 500)});out tags geom;`;
+  const placeQuery = `[out:json][timeout:12];(${around(samples, 'nwr["name"]["amenity"]', 500)}${around(samples, 'nwr["name"]["tourism"]', 500)}${around(samples, 'nwr["name"]["leisure"]', 500)}${around(samples, 'nwr["name"]["shop"]', 500)});out tags center;`;
   const [buildings, places] = await Promise.all([requestOverpass(buildingQuery), requestOverpass(placeQuery)]);
   return { buildings: buildings.elements || [], places: places.elements || [] };
 };
