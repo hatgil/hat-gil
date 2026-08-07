@@ -11,16 +11,16 @@ const safeCoordinate = (value: string | null): P | null => {
 };
 
 const requestOverpass = async (query: string) => {
-  const endpoints = ["https://overpass.osm.ch/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass-api.de/api/interpreter"];
+  const endpoints = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
   const controllers: AbortController[] = [];
   const requestOne = async (endpoint: string) => {
     const controller = new AbortController();
     controllers.push(controller);
-    const timeout = setTimeout(() => controller.abort(), 3000);
+    const timeout = setTimeout(() => controller.abort(), 6500);
     try {
       const response = await fetch(endpoint, {
         method: "POST", body: `data=${encodeURIComponent(query)}`,
-        headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, signal: controller.signal,
+        headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json", "User-Agent": "GeuneulOn/1.0" }, signal: controller.signal,
       });
       if (!response.ok) throw new Error("Overpass response failed");
       return await response.json() as { elements?: unknown[] };
@@ -38,14 +38,18 @@ const requestOverpass = async (query: string) => {
 };
 
 const loadEnvironment = async (from: P, to: P): Promise<Payload> => {
-  // 출발지와 도착지 사이를 고르게 나눠 경로 전 구간의 500m 주변을 조회한다.
-  const samples: P[] = Array.from({ length: 7 }, (_, index) => {
-    const ratio = index / 6;
-    return [from[0] + (to[0] - from[0]) * ratio, from[1] + (to[1] - from[1]) * ratio];
-  });
-  const around = (points: P[], filter: string, radius: number) => points.map(point => `${filter}(around:${radius},${point[0]},${point[1]});`).join("");
-  const buildingQuery = `[out:json][timeout:12];(${around(samples, 'way["building"]', 500)});out tags geom;`;
-  const placeQuery = `[out:json][timeout:12];(${around(samples, 'nwr["name"]["amenity"]', 500)}${around(samples, 'nwr["name"]["tourism"]', 500)}${around(samples, 'nwr["name"]["leisure"]', 500)}${around(samples, 'nwr["name"]["shop"]', 500)});out tags center;`;
+  // 겹치는 원형 쿼리 대신 경로 전체를 감싸는 500m 직사각형을 한 번 조회해
+  // 실제 건물 외곽선과 시설을 빠짐없이, 더 빠르게 받는다.
+  const latPadding = 500 / 111000;
+  const midLat = (from[0] + to[0]) / 2 * Math.PI / 180;
+  const lonPadding = 500 / (111000 * Math.max(.2, Math.cos(midLat)));
+  const south = Math.min(from[0], to[0]) - latPadding;
+  const north = Math.max(from[0], to[0]) + latPadding;
+  const west = Math.min(from[1], to[1]) - lonPadding;
+  const east = Math.max(from[1], to[1]) + lonPadding;
+  const bbox = `${south},${west},${north},${east}`;
+  const buildingQuery = `[out:json][timeout:18];way["building"](${bbox});out tags geom;`;
+  const placeQuery = `[out:json][timeout:18];(nwr["name"]["amenity"](${bbox});nwr["name"]["tourism"](${bbox});nwr["name"]["leisure"](${bbox});nwr["name"]["shop"](${bbox}););out tags center;`;
   const [buildings, places] = await Promise.all([requestOverpass(buildingQuery), requestOverpass(placeQuery)]);
   return { buildings: buildings.elements || [], places: places.elements || [] };
 };
