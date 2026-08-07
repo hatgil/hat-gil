@@ -47,7 +47,7 @@ const shadowVector = (hour: number) => {
   };
 };
 
-const optimizedRoute = async (from: P, to: P, hour: number): Promise<P[]> => {
+const optimizedRoute = (from: P, to: P, hour: number): P[] => {
   const profile = profileForHour(hour), shadow = shadowVector(hour);
   const latSpan = to[0] - from[0], lonSpan = to[1] - from[1];
   const length = Math.max(.0001, Math.hypot(latSpan, lonSpan));
@@ -74,14 +74,13 @@ const optimizedRoute = async (from: P, to: P, hour: number): Promise<P[]> => {
     from[1] + lonSpan * (.68 - ratioShift) + perpLon * bend * 1.05 + shadow.lon * shadeWeight * .72,
   ];
 
-  try {
-    const coordinates = [from, via1, via2, to].map(p => `${p[1]},${p[0]}`).join(";");
-    const result = await fetch(`https://routing.openstreetmap.de/routed-foot/route/v1/driving/${coordinates}?overview=full&geometries=geojson`).then(r => r.json());
-    if (result.routes?.[0]?.geometry?.coordinates) {
-      return result.routes[0].geometry.coordinates.map((point: number[]): P => [point[1], point[0]]);
-    }
-  } catch { /* 직선 보간 경로로 안전하게 대체 */ }
-  return [from, via1, via2, to];
+  return Array.from({ length: 33 }, (_, index): P => {
+    const t = index / 32, u = 1 - t;
+    return [
+      u ** 3 * from[0] + 3 * u ** 2 * t * via1[0] + 3 * u * t ** 2 * via2[0] + t ** 3 * to[0],
+      u ** 3 * from[1] + 3 * u ** 2 * t * via1[1] + 3 * u * t ** 2 * via2[1] + t ** 3 * to[1],
+    ];
+  });
 };
 
 const corridorPoints = (route: P[]) => {
@@ -90,26 +89,26 @@ const corridorPoints = (route: P[]) => {
   const centers = route.filter((_, index) => index % step === 0).slice(0, 13);
   if (route.length > 1 && centers[centers.length - 1] !== route[route.length - 1]) centers.push(route[route.length - 1]);
   const offsets: [number, number, number][] = [
-    [0, 0, 0], [.0045, 0, 500], [-.0045, 0, 500], [0, .0055, 500], [0, -.0055, 500],
-    [.0058, .0064, 850], [.0058, -.0064, 850], [-.0058, .0064, 850], [-.0058, -.0064, 850],
-    [.0081, 0, 900], [-.0081, 0, 900], [0, .0098, 900], [0, -.0098, 900],
+    [0, 0, 0], [.0025, 0, 280], [-.0025, 0, 280], [0, .0031, 280], [0, -.0031, 280],
+    [.0031, .0036, 480], [.0031, -.0036, 480], [-.0031, .0036, 480], [-.0031, -.0036, 480],
   ];
   const unique = new Map<string, { point: P; ring: number; seed: number }>();
   centers.forEach((center, centerIndex) => offsets.forEach(([lat, lon, ring], offsetIndex) => {
     const point: P = [center[0] + lat, center[1] + lon];
     const key = `${point[0].toFixed(4)}:${point[1].toFixed(4)}`;
-    if (!unique.has(key)) unique.set(key, { point, ring, seed: centerIndex * 13 + offsetIndex });
+    if (!unique.has(key)) unique.set(key, { point, ring, seed: centerIndex * 9 + offsetIndex });
   }));
   return [...unique.values()];
 };
 
 export default function DynamicMap() {
-  const node = useRef<HTMLDivElement>(null), map = useRef<any>(), path = useRef<any>();
-  const marks = useRef<any[]>([]), env = useRef<any[]>([]);
+  const node = useRef<HTMLDivElement>(null), map = useRef<any>(), path = useRef<any>(), pathHalo = useRef<any>();
+  const marks = useRef<any[]>([]), env = useRef<any[]>([]), animationFrame = useRef<number>();
   const [mapReady, setMapReady] = useState(false);
   const [start, setStart] = useState("미포항"), [end, setEnd] = useState("청사포 다릿돌전망대");
   const [anchors, setAnchors] = useState<[P, P]>([known.미포항, known.청사포다릿돌전망대]);
-  const [route, setRoute] = useState<P[]>([known.미포항, known.청사포다릿돌전망대]);
+  const [route, setRoute] = useState<P[]>(() => optimizedRoute(known.미포항, known.청사포다릿돌전망대, 14));
+  const routeRef = useRef<P[]>(route);
   const [active, setActive] = useState<K[]>(["wind", "shade"]), [hour, setHour] = useState(14);
   const [panel, setPanel] = useState(true), [status, setStatus] = useState("장소를 입력하고 경로 찾기를 누르세요."), [loading, setLoading] = useState(false);
   const profile = profileForHour(hour);
@@ -134,16 +133,24 @@ export default function DynamicMap() {
       const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(css);
       const script = document.createElement("script"); script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"; script.onload = init; document.head.appendChild(script);
     }
-    return () => { map.current?.remove(); map.current = undefined; };
+    return () => { if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current); map.current?.remove(); map.current = undefined; };
   }, []);
 
   useEffect(() => {
     if (!mapReady || !map.current) return;
-    if (path.current) path.current.remove();
-    path.current = window.L.polyline(route, { color: profile.color, weight: 9, opacity: .96 }).addTo(map.current);
+    if (!pathHalo.current) pathHalo.current = window.L.polyline(routeRef.current, { color: "#ffffff", weight: 15, opacity: .92, interactive: false }).addTo(map.current);
+    if (!path.current) path.current = window.L.polyline(routeRef.current, { color: profile.color, weight: 9, opacity: 1 }).addTo(map.current);
+  }, [mapReady]);
+
+  useEffect(() => {
+    path.current?.setStyle({ color: profile.color });
+  }, [profile.color]);
+
+  useEffect(() => {
+    if (!mapReady || !map.current) return;
     const visiblePoints = active.length && environmentPoints.length ? environmentPoints.map(item => item.point) : route;
     map.current.fitBounds(window.L.latLngBounds(visiblePoints), { padding: [55, 55] });
-  }, [mapReady, route, profile.color, environmentPoints, active.length]);
+  }, [mapReady, route, environmentPoints, active.length]);
 
   useEffect(() => {
     if (!mapReady || !map.current) return;
@@ -156,16 +163,26 @@ export default function DynamicMap() {
   }, [mapReady, anchors]);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    const timer = window.setTimeout(async () => {
-      const nextRoute = await optimizedRoute(anchors[0], anchors[1], hour);
-      if (cancelled) return;
-      setRoute(nextRoute);
-      setStatus(`${String(hour).padStart(2, "0")}시 ${profile.title}로 환경값을 반영해 다시 계산했습니다.`);
-      setLoading(false);
-    }, 220);
-    return () => { cancelled = true; window.clearTimeout(timer); };
+    if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current);
+    const nextRoute = optimizedRoute(anchors[0], anchors[1], hour);
+    const previousRoute = routeRef.current.length === nextRoute.length ? routeRef.current : nextRoute;
+    const startedAt = performance.now();
+    setStatus(`${String(hour).padStart(2, "0")}시 ${profile.title}로 즉시 전환했습니다.`);
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / 140);
+      const eased = progress * progress * (3 - 2 * progress);
+      const currentRoute = nextRoute.map((point, index): P => [
+        previousRoute[index][0] + (point[0] - previousRoute[index][0]) * eased,
+        previousRoute[index][1] + (point[1] - previousRoute[index][1]) * eased,
+      ]);
+      routeRef.current = currentRoute;
+      pathHalo.current?.setLatLngs(currentRoute);
+      path.current?.setLatLngs(currentRoute);
+      if (progress < 1) animationFrame.current = window.requestAnimationFrame(animate);
+      else { routeRef.current = nextRoute; setRoute(nextRoute); setLoading(false); }
+    };
+    animationFrame.current = window.requestAnimationFrame(animate);
+    return () => { if (animationFrame.current) window.cancelAnimationFrame(animationFrame.current); };
   }, [anchors, hour, profile.title]);
 
   useEffect(() => {
@@ -178,27 +195,27 @@ export default function DynamicMap() {
 
     if (active.length) {
       route.filter((_, index) => index % Math.max(1, Math.floor(route.length / 3)) === 0).slice(0, 4)
-        .forEach(point => add(L.circle(point, { radius: 1000, color: "#287b8c", fillColor: "#dff4f2", fillOpacity: .045, opacity: .75, weight: 2, dashArray: "9 7", interactive: false })));
+        .forEach(point => add(L.circle(point, { radius: 500, color: "#287b8c", fillColor: "#dff4f2", fillOpacity: .045, opacity: .75, weight: 2, dashArray: "9 7", interactive: false })));
     }
     if (active.includes("shade")) buildingPoints.forEach(({ point }, index) => {
-      const width = .00018 + index % 3 * .00004;
+      const width = .0003 + index % 3 * .00007, shadeLat = shadow.lat * 1.4, shadeLon = shadow.lon * 1.4;
       add(L.polygon([
         [point[0] - width, point[1] - width], [point[0] + width, point[1] + width],
-        [point[0] + shadow.lat + width, point[1] + shadow.lon + width], [point[0] + shadow.lat - width, point[1] + shadow.lon - width],
-      ], { color: "#42208e", fillColor: "#7148d7", fillOpacity: hour >= 7 && hour <= 19 ? .48 : .2, weight: 2, dashArray: "5 3" }));
+        [point[0] + shadeLat + width, point[1] + shadeLon + width], [point[0] + shadeLat - width, point[1] + shadeLon - width],
+      ], { color: "#42208e", fillColor: "#7148d7", fillOpacity: hour >= 7 && hour <= 19 ? .4 : .18, weight: 3, dashArray: "6 3" }));
     });
-    if (active.includes("fog")) sparsePoints.forEach(({ point, ring }) => add(L.circle(point, { radius: ring ? 155 : 125, color: "#087f9d", fillColor: "#9de3ec", fillOpacity: fog / 150 + .14, weight: 3, dashArray: "10 6" })));
+    if (active.includes("fog")) sparsePoints.forEach(({ point, ring }) => add(L.circle(point, { radius: ring ? 220 : 185, color: "#087f9d", fillColor: "#9de3ec", fillOpacity: fog / 165 + .12, weight: 3, dashArray: "10 6" })));
     if (active.includes("wind")) generalPoints.forEach(({ point, seed }) => {
       const sea = 2.1 + hour * .13, building = 4.3 + seed % 3 + hour * .08;
       const waves = (className: string, direction: number, speed: number, duration: number) => `<div class="windMotion ${className}" style="--dir:${direction}deg;--dur:${duration}s"><span>≋</span><span>≋</span><span>≋</span><small>${speed.toFixed(1)}m/s</small></div>`;
       add(L.marker([point[0] + .00045, point[1] - .00045], { icon: L.divIcon({ className: "windAnchor", html: waves("seaFlow", (110 + hour * 13) % 360, sea, Math.max(.45, 1.8 - sea * .15)) }) }));
       add(L.marker([point[0] - .00045, point[1] + .00045], { icon: L.divIcon({ className: "windAnchor", html: waves("buildingFlow", (35 + hour * 17 + seed * 19) % 360, building, Math.max(.28, 1.6 - building * .14)) }) }));
     });
-    if (active.includes("uv")) generalPoints.forEach(({ point, ring }) => add(L.circle(point, { radius: ring ? 120 : 100, color: "#e37d00", fillColor: "#ffd438", fillOpacity: uv / 20 + .12, weight: 3 })));
+    if (active.includes("uv")) generalPoints.forEach(({ point, ring }) => add(L.circle(point, { radius: ring ? 180 : 150, color: "#e37d00", fillColor: "#ffd438", fillOpacity: uv / 24 + .1, weight: 3 })));
     if (active.includes("crowd")) generalPoints.forEach(({ point, seed }) => add(L.marker(point, { icon: L.divIcon({ className: "crowdMark", html: `♟<b style="font-size:${18 + crowd / 5 + seed % 5}px">♟</b>` }) })));
     if (active.includes("facility")) sparsePoints.forEach(({ point, seed }) => add(L.marker(point, { icon: L.divIcon({ className: "facilityMark", html: ["WC", "쉼", "편", "P"][seed % 4] }) })));
     if (active.includes("temp")) generalPoints.forEach(({ point, seed }) => add(L.marker(point, { icon: L.divIcon({ className: "tempMark", html: `${temp + seed % 3 - 1}°` }) })));
-    path.current?.bringToFront();
+    pathHalo.current?.bringToFront(); path.current?.bringToFront();
   }, [active, hour, environmentPoints, fog, crowd, temp, uv, shadow.lat, shadow.lon, mapReady, route]);
 
   const locate = async (name: string): Promise<P | null> => {
@@ -217,6 +234,7 @@ export default function DynamicMap() {
       const [from, to] = await Promise.all([locate(start), locate(end)]);
       if (!from || !to) throw Error("장소를 찾지 못했습니다.");
       setAnchors([from, to]);
+      setLoading(false);
     } catch (error) {
       setStatus(`${error instanceof Error ? error.message : "경로 계산 실패"} 장소명을 더 구체적으로 입력해 주세요.`);
       setLoading(false);
@@ -226,7 +244,7 @@ export default function DynamicMap() {
   const toggle = (kind: K) => setActive(active.includes(kind) ? active.filter(value => value !== kind) : [...active, kind]);
 
   return <main>
-    <header><b>〰 바닷길</b><span>입력 장소 기반 · 환경 반경 1km</span></header>
+    <header><b>〰 바닷길</b><span>입력 장소 기반 · 환경 반경 500m</span></header>
     <div ref={node} id="map" />
     <section className="controls">
       <form className="inputs" onSubmit={search}>
@@ -244,13 +262,13 @@ export default function DynamicMap() {
     {panel ? <aside>
       <button className="panelClose" aria-label="시간대별 예측 최소화" onClick={() => setPanel(false)}>×</button>
       <b>시간대별 예측</b>
-      <input aria-label="예측 시간" type="range" min="0" max="23" value={hour} onChange={event => setHour(+event.target.value)} />
+      <input aria-label="예측 시간" type="range" min="0" max="23" value={hour} onInput={event => setHour(+event.currentTarget.value)} />
       <strong>{String(hour).padStart(2, "0")}:00</strong><span>태양 고도 {hour >= 7 && hour <= 19 ? Math.max(4, 63 - Math.abs(hour - 12) * 9) : 0}°</span>
       <div className="metrics"><p><i className="yellow" />UV {uv}</p><p><i className="blue" />해풍 {(2.1 + hour * .13).toFixed(1)}</p><p><i className="orange" />빌딩풍 {(4.3 + hour * .08).toFixed(1)}</p><p><i className="cyan" />해무 {fog}%</p><p><i className="pink" />밀집도 {crowd}%</p><p><i className="red" />온도 {temp}°</p></div>
     </aside> : <button className="panelOpen" onClick={() => setPanel(true)}>시간대별 예측 열기</button>}
     <div className={`routeInfo ${profile.key}`}>
       <b>{profile.title}</b><span>{profile.detail}</span>
-      <small>출발·도착 고정 · 환경 레이어는 경로 주변 500m~1km까지 함께 갱신</small>
+      <small>출발·도착 고정 · 환경 레이어는 경로 주변 500m 반경에서 함께 갱신</small>
       <div className="profileSchedule" aria-label="시간대별 추천 경로 구간">
         <span className={profile.key === "night" ? "current" : ""}>00~06 야간 안전</span>
         <span className={profile.key === "balanced" ? "current" : ""}>07~12 쾌적 균형</span>
@@ -259,6 +277,6 @@ export default function DynamicMap() {
         <span className={profile.key === "night" ? "current" : ""}>20~23 야간 안전</span>
       </div>
     </div>
-    <div className="legend"><b>환경 표시 범위</b><span>점선 영역: 경로 주변 최대 1km</span><span><i className="blue" />해풍</span><span><i className="orange" />빌딩풍</span></div>
+    <div className="legend"><b>환경 표시 범위</b><span>점선 영역: 경로 주변 500m</span><span><i className="blue" />해풍</span><span><i className="orange" />빌딩풍</span></div>
   </main>;
 }
