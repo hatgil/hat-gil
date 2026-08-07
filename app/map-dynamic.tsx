@@ -224,40 +224,6 @@ const corridorPoints = (route: P[]) => {
   return [...unique.values()];
 };
 
-// 외부 지도 서버를 기다리는 동안에도 레이어와 대중교통 선택이 즉시 보이도록
-// 출발지~도착지 축을 따라 가벼운 미리보기 데이터를 먼저 만든다.
-const previewEnvironment = (anchors: [P, P]): EnvironmentData => {
-  const [from, to] = anchors;
-  const latSpan = to[0] - from[0], lonSpan = to[1] - from[1];
-  const span = Math.max(.0001, Math.hypot(latSpan, lonSpan));
-  const normal: P = [-lonSpan / span, latSpan / span];
-  const pointAt = (ratio: number, offset = 0): P => [
-    from[0] + latSpan * ratio + normal[0] * offset,
-    from[1] + lonSpan * ratio + normal[1] * offset,
-  ];
-  const rectangle = (center: P, size: number): P[] => [
-    [center[0] - size, center[1] - size * 1.25], [center[0] - size, center[1] + size * 1.25],
-    [center[0] + size, center[1] + size * 1.25], [center[0] + size, center[1] - size * 1.25],
-  ];
-  const buildings: Building[] = Array.from({ length: 30 }, (_, index) => {
-    const ratio = .04 + (index % 15) / 14 * .92;
-    const side = index < 15 ? 1 : -1;
-    const center = pointAt(ratio, side * (.00065 + (index % 3) * .00022));
-    return { id: `preview-building-${index}`, name: "주변 건물(불러오는 중)", polygon: rectangle(center, .00013 + index % 4 * .000025), height: 8 + index % 7 * 3 };
-  });
-  const places: Place[] = Array.from({ length: 14 }, (_, index) => ({
-    id: `preview-place-${index}`, name: `주변 시설 ${index + 1}`, category: index % 3 === 0 ? "휴식 시설" : index % 3 === 1 ? "생활 시설" : "보행 시설",
-    road: "경로 주변", point: pointAt(.06 + index / 13 * .88, (index % 2 ? 1 : -1) * .00125), seed: index * 11,
-  }));
-  const transitStops: TransitStop[] = [
-    { id: "preview-bus-start", name: "출발지 인근 정류장", point: pointAt(.07, .00025), kind: "bus" },
-    { id: "preview-bus-end", name: "도착지 인근 정류장", point: pointAt(.93, -.00025), kind: "bus" },
-    { id: "preview-subway-start", name: "출발지 인근 역", point: pointAt(.14, -.00045), kind: "subway" },
-    { id: "preview-subway-end", name: "도착지 인근 역", point: pointAt(.86, .00045), kind: "subway" },
-  ];
-  return { buildings, places, transitStops };
-};
-
 const parseHeight = (tags: Record<string, string> = {}) => {
   const explicit = Number.parseFloat(tags.height || "");
   if (Number.isFinite(explicit)) return clamp(explicit, 3, 100);
@@ -275,19 +241,12 @@ const placeCategory = (tags: Record<string, string> = {}) => {
 };
 
 const commonsImage = (tags: Record<string, string> = {}) => {
-  if (/^https?:\/\//.test(tags.image || "")) return tags.image;
+  const direct = tags.image || "";
+  if (/^https?:\/\//.test(direct) && /\.(?:jpe?g|png|webp)(?:\?|$)/i.test(direct) && !/document|scan|pdf/i.test(direct)) return direct;
   const file = (tags.wikimedia_commons || "").replace(/^File:/, "");
-  return file ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file)}?width=640` : undefined;
-};
-
-const searchCommonsImage = async (name: string, signal: AbortSignal) => {
-  const params = new URLSearchParams({
-    action: "query", format: "json", origin: "*", generator: "search", gsrsearch: `${name} 부산`,
-    gsrnamespace: "6", gsrlimit: "1", prop: "imageinfo", iiprop: "url", iiurlwidth: "720",
-  });
-  const payload = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, { signal }).then(response => response.ok ? response.json() : null);
-  const page = payload?.query?.pages ? Object.values(payload.query.pages)[0] as any : null;
-  return page?.imageinfo?.[0]?.thumburl || page?.imageinfo?.[0]?.url || null;
+  return /\.(?:jpe?g|png|webp)$/i.test(file) && !/document|scan|pdf/i.test(file)
+    ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file)}?width=640`
+    : undefined;
 };
 
 const crowdScore = (place: Place, hour: number) => {
@@ -526,8 +485,8 @@ export default function DynamicMap() {
       } catch { /* 저장 공간을 사용할 수 없으면 메모리 캐시만 사용 */ }
     }
     if (cached) { apply(cached, true); return () => controller.abort(); }
-    apply(previewEnvironment(anchors));
-    setFeatureStatus("즉시 미리보기 표시 중 · 실제 건물·시설·정류장으로 자동 갱신");
+    setBuildings([]); setPlaces([]); setTransitStops([]);
+    setFeatureStatus("실제 건물 외곽선·시설·정류장 데이터를 불러오는 중…");
     fetchEnvironmentFeatures(anchors, controller.signal).then(data => {
       if (controller.signal.aborted) return;
       environmentCache.current.set(key, data);
@@ -554,24 +513,12 @@ export default function DynamicMap() {
 
   useEffect(() => {
     if (!selectedFacility) { setFacilityPhoto(null); return; }
-    if (selectedFacility.image) { setFacilityPhoto(selectedFacility.image); return; }
-    const controller = new AbortController();
-    setFacilityPhoto(null);
-    searchCommonsImage(selectedFacility.name, controller.signal).then(photo => {
-      if (!controller.signal.aborted) setFacilityPhoto(photo);
-    }).catch(() => undefined);
-    return () => controller.abort();
+    setFacilityPhoto(selectedFacility.image || null);
   }, [selectedFacility]);
 
   useEffect(() => {
     if (!selectedPlace) { setDensityPhoto(null); return; }
-    if (selectedPlace.image) { setDensityPhoto(selectedPlace.image); return; }
-    const controller = new AbortController();
-    setDensityPhoto(null);
-    searchCommonsImage(selectedPlace.name, controller.signal).then(photo => {
-      if (!controller.signal.aborted) setDensityPhoto(photo);
-    }).catch(() => undefined);
-    return () => controller.abort();
+    setDensityPhoto(selectedPlace.image || null);
   }, [selectedPlace]);
 
   useEffect(() => {
