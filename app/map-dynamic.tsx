@@ -244,7 +244,7 @@ const crowdScore = (place: Place, hour: number) => {
 };
 
 const fetchEnvironmentFeatures = async (anchors: [P, P], signal: AbortSignal): Promise<EnvironmentData> => {
-  const params = new URLSearchParams({ from: anchors[0].join(","), to: anchors[1].join(",") });
+  const params = new URLSearchParams({ from: anchors[0].join(","), to: anchors[1].join(","), rev: "3" });
   const response = await fetch(`/api/environment?${params}`, { signal });
   if (!response.ok) throw new Error("주변 지도 데이터 연결에 실패했습니다.");
   const payload = await response.json();
