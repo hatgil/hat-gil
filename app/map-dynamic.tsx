@@ -7,6 +7,7 @@ declare global { interface Window { L: any } }
 type P = [number, number];
 type K = "uv" | "wind" | "fog" | "crowd" | "facility" | "shade" | "temp";
 type ProfileKey = "night" | "balanced" | "shadeWind";
+type TransportMode = "walk" | "bus" | "subway" | "best";
 type HourWeather = {
   time: string;
   temperature: number;
@@ -45,6 +46,8 @@ type Place = {
   description?: string;
   seed: number;
 };
+type TransitStop = { id: string; name: string; point: P; kind: "bus" | "subway"; ref?: string };
+type TransitPlan = { kind: "bus" | "subway"; startStop: TransitStop; endStop: TransitStop; minutes: number; walkMinutes: number; rideMinutes: number; distanceKm: number };
 
 const layerTools: [K, string, string][] = [
   ["uv", "☀", "자외선"], ["wind", "≋", "해풍·빌딩풍"], ["fog", "〰", "해무"],
@@ -74,6 +77,14 @@ const formatDate = (value: string) => new Intl.DateTimeFormat("ko-KR", {
 }).format(new Date(`${value}T12:00:00`));
 const formatClock = (value?: string) => value?.split("T")[1]?.slice(0, 5) || "--:--";
 const kakaoRoadview = (point: P) => `https://map.kakao.com/link/roadview/${point[0]},${point[1]}`;
+const kakaoTransit = (startName: string, start: P, endName: string, end: P) => `https://map.kakao.com/link/by/traffic/${encodeURIComponent(startName)},${start[0]},${start[1]}/${encodeURIComponent(endName)},${end[0]},${end[1]}`;
+const distanceKm = (from: P, to: P) => {
+  const lat = (from[0] + to[0]) / 2 * Math.PI / 180;
+  const north = (to[0] - from[0]) * 111.32;
+  const east = (to[1] - from[1]) * 111.32 * Math.cos(lat);
+  return Math.hypot(north, east);
+};
+const routeDistanceKm = (points: P[]) => points.slice(1).reduce((total, point, index) => total + distanceKm(points[index], point), 0);
 
 const profileForHour = (hour: number): { key: ProfileKey; title: string; detail: string; color: string } => {
   if (hour <= 6 || hour >= 20) return {
@@ -187,6 +198,14 @@ const fetchWalkingRoute = async (from: P, to: P, hour: number, signal: AbortSign
   return await request(routeWaypoints(from, to, hour)) || await request([from, to]) || Promise.reject(new Error("보도 경로를 불러오지 못했습니다."));
 };
 
+const fetchNetworkSegment = async (from: P, to: P, mode: "foot" | "car", signal: AbortSignal): Promise<P[]> => {
+  const service = mode === "foot" ? "routed-foot" : "routed-car";
+  const response = await fetch(`https://routing.openstreetmap.de/${service}/route/v1/driving/${from[1]},${from[0]};${to[1]},${to[0]}?overview=full&geometries=geojson`, { signal });
+  if (!response.ok) return [from, to];
+  const payload = await response.json();
+  return payload.routes?.[0]?.geometry?.coordinates?.map((point: number[]): P => [point[1], point[0]]) || [from, to];
+};
+
 const corridorPoints = (route: P[]) => {
   if (!route.length) return [] as { point: P; ring: number; seed: number }[];
   const step = Math.max(1, Math.floor(route.length / 12));
@@ -242,45 +261,61 @@ const crowdScore = (place: Place, hour: number) => {
   return clamp(28 + peak + category + place.seed % 17, 8, 96);
 };
 
-const fetchEnvironmentFeatures = async (route: P[], signal: AbortSignal): Promise<{ buildings: Building[]; places: Place[] }> => {
-  if (!route.length) return { buildings: [], places: [] };
+const fetchEnvironmentFeatures = async (route: P[], signal: AbortSignal): Promise<{ buildings: Building[]; places: Place[]; transitStops: TransitStop[] }> => {
+  if (!route.length) return { buildings: [], places: [], transitStops: [] };
   const samples = [route[0], route[Math.floor(route.length / 2)], route[route.length - 1]];
-  const around = (filter: string) => samples.map(point => `${filter}(around:520,${point[0]},${point[1]});`).join("");
-  const query = `[out:json][timeout:25];(${around('way["building"]')}${around('node["name"]["amenity"]')}${around('node["name"]["tourism"]')}${around('node["name"]["leisure"]')}${around('node["name"]["shop"]')}${around('way["name"]["highway"]')});out tags center geom;`;
-  const endpoints = ["https://overpass.private.coffee/api/interpreter", "https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
-  let payload: any;
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, { method: "POST", body: `data=${encodeURIComponent(query)}`, headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal });
-      if (response.ok) { payload = await response.json(); break; }
-    } catch (error) {
-      if (signal.aborted) throw error;
-    }
-  }
-  if (!payload) throw new Error("건물·시설 지도 데이터를 불러오지 못했습니다.");
-  const buildings: Building[] = [], places: Place[] = [];
-  const placeNames = new Set<string>();
-  for (const element of payload.elements || []) {
+  const ends = [route[0], route[route.length - 1]];
+  const response = await fetch("/api/environment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ samples, ends }), signal });
+  if (!response.ok) throw new Error("주변 지도 데이터 연결에 실패했습니다.");
+  const payload = await response.json();
+  const buildingPayload: any = { elements: payload.buildings || [] };
+  const placePayload: any = { elements: payload.places || [] };
+  const buildings: Building[] = [], places: Place[] = [], transitStops: TransitStop[] = [];
+  const placeNames = new Set<string>(), stopIds = new Set<string>();
+
+  for (const element of buildingPayload.elements || []) {
     const tags = element.tags || {};
-    if (tags.building && Array.isArray(element.geometry)) {
-      const polygon = element.geometry.map((point: { lat: number; lon: number }): P => [point.lat, point.lon]);
-      if (polygon.length >= 3) buildings.push({ id: String(element.id), name: tags.name || "이름 없는 건물", polygon, height: parseHeight(tags) });
-      continue;
-    }
-    if (!tags.name || placeNames.has(`${tags.name}:${tags.highway || tags.amenity || tags.tourism || ""}`)) continue;
+    if (!tags.building || !Array.isArray(element.geometry)) continue;
+    const polygon = element.geometry.map((point: { lat: number; lon: number }): P => [point.lat, point.lon]);
+    if (polygon.length >= 3) buildings.push({ id: String(element.id), name: tags.name || "이름 없는 건물", polygon, height: parseHeight(tags) });
+  }
+
+  for (const element of placePayload.elements || []) {
+    const tags = element.tags || {};
     const lat = numeric(element.lat, numeric(element.center?.lat, NaN));
     const lon = numeric(element.lon, numeric(element.center?.lon, NaN));
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-    placeNames.add(`${tags.name}:${tags.highway || tags.amenity || tags.tourism || ""}`);
+    const isBus = tags.highway === "bus_stop" || tags.public_transport === "platform" && tags.bus === "yes";
+    const isSubway = tags.station === "subway" || tags.railway === "station" || tags.subway === "yes";
+    if ((isBus || isSubway) && !stopIds.has(`${isBus ? "bus" : "subway"}:${element.id}`)) {
+      stopIds.add(`${isBus ? "bus" : "subway"}:${element.id}`);
+      transitStops.push({ id: String(element.id), name: tags.name || (isBus ? "이름 없는 버스정류장" : "이름 없는 지하철역"), point: [lat, lon], kind: isBus ? "bus" : "subway", ref: tags.ref || tags.local_ref });
+    }
+    if (!tags.name || isBus || isSubway || placeNames.has(`${tags.name}:${tags.amenity || tags.tourism || tags.shop || ""}`)) continue;
+    placeNames.add(`${tags.name}:${tags.amenity || tags.tourism || tags.shop || ""}`);
     places.push({
-      id: String(element.id), name: tags.name, category: placeCategory(tags),
-      road: tags["addr:street"] || (tags.highway ? tags.name : "주변 보행 구간"), point: [lat, lon],
+      id: String(element.id), name: tags.name, category: placeCategory(tags), road: tags["addr:street"] || "주변 보행 구간", point: [lat, lon],
       image: commonsImage(tags), address: [tags["addr:city"], tags["addr:district"], tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ") || undefined,
       openingHours: tags.opening_hours, phone: tags.phone || tags["contact:phone"], website: tags.website || tags["contact:website"],
       operator: tags.operator, wheelchair: tags.wheelchair, description: tags.description, seed: Number(element.id) % 97,
     });
   }
-  return { buildings: buildings.slice(0, 220), places: places.slice(0, 80) };
+  if (!buildings.length && !places.length && !transitStops.length) throw new Error("주변 건물·시설 데이터가 없습니다.");
+  return { buildings: buildings.slice(0, 260), places: places.slice(0, 100), transitStops: transitStops.slice(0, 100) };
+};
+
+const makeTransitPlan = (kind: "bus" | "subway", from: P, to: P, stops: TransitStop[]): TransitPlan | null => {
+  const available = stops.filter(stop => stop.kind === kind);
+  if (available.length < 2) return null;
+  const nearest = (point: P, excluded?: string) => available.filter(stop => stop.id !== excluded).sort((a, b) => distanceKm(point, a.point) - distanceKm(point, b.point))[0];
+  const startStop = nearest(from), endStop = startStop ? nearest(to, startStop.id) : undefined;
+  if (!startStop || !endStop) return null;
+  const accessDistance = (distanceKm(from, startStop.point) + distanceKm(endStop.point, to)) * 1.22;
+  const transitDistance = distanceKm(startStop.point, endStop.point) * (kind === "bus" ? 1.3 : 1.08);
+  const walkMinutes = accessDistance / 4.5 * 60;
+  const rideMinutes = transitDistance / (kind === "bus" ? 18 : 32) * 60;
+  const waitMinutes = kind === "bus" ? 7 : 5;
+  return { kind, startStop, endStop, minutes: Math.max(8, Math.round(walkMinutes + rideMinutes + waitMinutes)), walkMinutes: Math.round(walkMinutes), rideMinutes: Math.round(rideMinutes), distanceKm: accessDistance + transitDistance };
 };
 
 const parseWeather = (payload: any, selectedDate: string, source: string, sourceDetail: string, isKma: boolean): WeatherData | null => {
@@ -329,7 +364,7 @@ const fetchWeather = async (point: P, selectedDate: string, signal: AbortSignal)
 
 export default function DynamicMap() {
   const node = useRef<HTMLDivElement>(null), map = useRef<any>(), path = useRef<any>(), pathHalo = useRef<any>();
-  const marks = useRef<any[]>([]), env = useRef<any[]>([]), animationFrame = useRef<number>();
+  const marks = useRef<any[]>([]), env = useRef<any[]>([]), transitLayers = useRef<any[]>([]), animationFrame = useRef<number>();
   const routeCache = useRef<Map<string, P[]>>(new Map());
   const fitOnNextRoute = useRef(true);
   const [mapReady, setMapReady] = useState(false);
@@ -340,9 +375,10 @@ export default function DynamicMap() {
   const [active, setActive] = useState<K[]>(["wind", "shade"]), [hour, setHour] = useState(new Date().getHours());
   const [selectedDate, setSelectedDate] = useState(dateKey(new Date()));
   const [weather, setWeather] = useState<WeatherData | null>(null), [weatherLoading, setWeatherLoading] = useState(true);
-  const [buildings, setBuildings] = useState<Building[]>([]), [places, setPlaces] = useState<Place[]>([]);
+  const [buildings, setBuildings] = useState<Building[]>([]), [places, setPlaces] = useState<Place[]>([]), [transitStops, setTransitStops] = useState<TransitStop[]>([]);
+  const [transportMode, setTransportMode] = useState<TransportMode>("best");
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
-  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null), [facilityPhoto, setFacilityPhoto] = useState<string | null>(null);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null), [facilityPhoto, setFacilityPhoto] = useState<string | null>(null), [densityPhoto, setDensityPhoto] = useState<string | null>(null);
   const [facilityOpen, setFacilityOpen] = useState(true), [searchOpen, setSearchOpen] = useState(true), [legendOpen, setLegendOpen] = useState(true);
   const [densityOpen, setDensityOpen] = useState(true);
   const [featureStatus, setFeatureStatus] = useState("실제 건물·시설 확인 중…");
@@ -360,6 +396,12 @@ export default function DynamicMap() {
   const selectedPlace = useMemo(() => places.find(place => place.id === selectedPlaceId) || null, [places, selectedPlaceId]);
   const selectedCrowd = selectedPlace ? crowdScore(selectedPlace, hour) : 0;
   const selectedFacility = useMemo(() => places.find(place => place.id === selectedFacilityId) || null, [places, selectedFacilityId]);
+  const walkMinutes = Math.max(1, Math.round(routeDistanceKm(route) / 4.5 * 60));
+  const busPlan = useMemo(() => makeTransitPlan("bus", anchors[0], anchors[1], transitStops), [anchors, transitStops]);
+  const subwayPlan = useMemo(() => makeTransitPlan("subway", anchors[0], anchors[1], transitStops), [anchors, transitStops]);
+  const bestTransitPlan = useMemo(() => [busPlan, subwayPlan].filter(Boolean).sort((a, b) => a!.minutes - b!.minutes)[0] || null, [busPlan, subwayPlan]);
+  const bestMode: "walk" | "bus" | "subway" = bestTransitPlan && bestTransitPlan.minutes < walkMinutes ? bestTransitPlan.kind : "walk";
+  const selectedTransitPlan = transportMode === "bus" ? busPlan : transportMode === "subway" ? subwayPlan : transportMode === "best" && bestMode !== "walk" ? bestTransitPlan : null;
 
   useEffect(() => {
     const init = () => {
@@ -441,10 +483,10 @@ export default function DynamicMap() {
     setFeatureStatus("실제 건물·시설 확인 중…");
     fetchEnvironmentFeatures(route, controller.signal).then(data => {
       if (controller.signal.aborted) return;
-      setBuildings(data.buildings); setPlaces(data.places);
-      setFeatureStatus(`실제 건물 ${data.buildings.length}곳 · 시설·도로 ${data.places.length}곳 확인`);
+      setBuildings(data.buildings); setPlaces(data.places); setTransitStops(data.transitStops);
+      setFeatureStatus(`실제 건물 ${data.buildings.length}곳 · 시설 ${data.places.length}곳 · 정류장·역 ${data.transitStops.length}곳 확인`);
     }).catch(() => {
-      if (!controller.signal.aborted) { setBuildings([]); setPlaces([]); setFeatureStatus("지도 데이터 연결 지연 · 가짜 그늘은 표시하지 않음"); }
+      if (!controller.signal.aborted) { setBuildings([]); setPlaces([]); setTransitStops([]); setFeatureStatus("지도 데이터 연결 지연 · 잠시 후 다시 계산해 주세요"); }
     });
     return () => controller.abort();
   }, [route]);
@@ -468,6 +510,17 @@ export default function DynamicMap() {
     }).catch(() => undefined);
     return () => controller.abort();
   }, [selectedFacility]);
+
+  useEffect(() => {
+    if (!selectedPlace) { setDensityPhoto(null); return; }
+    if (selectedPlace.image) { setDensityPhoto(selectedPlace.image); return; }
+    const controller = new AbortController();
+    setDensityPhoto(null);
+    searchCommonsImage(selectedPlace.name, controller.signal).then(photo => {
+      if (!controller.signal.aborted) setDensityPhoto(photo);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [selectedPlace]);
 
   useEffect(() => {
     env.current.forEach(layer => layer.remove()); env.current = [];
@@ -508,6 +561,30 @@ export default function DynamicMap() {
     pathHalo.current?.bringToFront(); path.current?.bringToFront();
   }, [active, hour, environmentPoints, buildings, places, live.fog, live.uv, live.temperature, live.windDirection, seaWind, buildingWind, sun.elevation, sun.azimuth, mapReady, route]);
 
+  useEffect(() => {
+    transitLayers.current.forEach(layer => layer.remove()); transitLayers.current = [];
+    if (!mapReady || !map.current || !selectedTransitPlan) return;
+    const controller = new AbortController(), L = window.L;
+    const add = (layer: any) => transitLayers.current.push(layer.addTo(map.current));
+    Promise.all([
+      fetchNetworkSegment(anchors[0], selectedTransitPlan.startStop.point, "foot", controller.signal),
+      selectedTransitPlan.kind === "bus" ? fetchNetworkSegment(selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point, "car", controller.signal) : Promise.resolve([selectedTransitPlan.startStop.point, selectedTransitPlan.endStop.point]),
+      fetchNetworkSegment(selectedTransitPlan.endStop.point, anchors[1], "foot", controller.signal),
+    ]).then(([access, transit, egress]) => {
+      if (controller.signal.aborted) return;
+      const color = selectedTransitPlan.kind === "bus" ? "#1178c4" : "#7a39b8";
+      add(L.polyline(access, { color: "#263f47", weight: 6, opacity: .9, dashArray: "6 6" }));
+      add(L.polyline(transit, { color: "#ffffff", weight: 13, opacity: .92 }));
+      add(L.polyline(transit, { color, weight: 8, opacity: .96, dashArray: selectedTransitPlan.kind === "subway" ? "12 7" : undefined }));
+      add(L.polyline(egress, { color: "#263f47", weight: 6, opacity: .9, dashArray: "6 6" }));
+      const icon = (label: string, className: string) => L.divIcon({ className: `transitStop ${className}`, html: `<b>${label}</b>` });
+      add(L.marker(selectedTransitPlan.startStop.point, { icon: icon(selectedTransitPlan.kind === "bus" ? "BUS" : "SUB", selectedTransitPlan.kind) }).bindTooltip(`승차 · ${selectedTransitPlan.startStop.name}`, { direction: "top" }));
+      add(L.marker(selectedTransitPlan.endStop.point, { icon: icon("하차", selectedTransitPlan.kind) }).bindTooltip(`하차 · ${selectedTransitPlan.endStop.name}`, { direction: "top" }));
+      pathHalo.current?.bringToFront(); path.current?.bringToFront();
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [mapReady, selectedTransitPlan, anchors]);
+
   const locate = async (name: string): Promise<P | null> => {
     const key = name.replaceAll(" ", "");
     if (known[key]) return known[key];
@@ -547,6 +624,22 @@ export default function DynamicMap() {
           <input aria-label="도착지" value={end} onChange={event => setEnd(event.target.value)} placeholder="도착지" />
           <button disabled={loading}>{loading ? "계산 중…" : "경로 찾기"}</button>
         </form>
+        <div className="transportPicker">
+          <div className="transportHeading"><b>이동 방법 비교</b><small>도보·버스·지하철</small></div>
+          <div className="transportTabs">
+            <button type="button" className={transportMode === "best" ? "selected" : ""} onClick={() => setTransportMode("best")}>★ 통합 추천</button>
+            <button type="button" className={transportMode === "walk" ? "selected" : ""} onClick={() => setTransportMode("walk")}>도보 {walkMinutes}분</button>
+            <button type="button" disabled={!busPlan} className={transportMode === "bus" ? "selected" : ""} onClick={() => setTransportMode("bus")}>버스 {busPlan ? `${busPlan.minutes}분` : "연결 중"}</button>
+            <button type="button" disabled={!subwayPlan} className={transportMode === "subway" ? "selected" : ""} onClick={() => setTransportMode("subway")}>지하철 {subwayPlan ? `${subwayPlan.minutes}분` : "없음"}</button>
+          </div>
+          {transportMode === "best" && <div className="transportSummary"><strong>{bestMode === "walk" ? "도보 최적 경로" : bestMode === "bus" ? "버스 연계 추천" : "지하철 연계 추천"}</strong><span>현재 비교 결과 약 {bestMode === "walk" ? walkMinutes : bestTransitPlan?.minutes}분</span></div>}
+          {selectedTransitPlan && <div className={`transportSummary ${selectedTransitPlan.kind}`}>
+            <strong>{selectedTransitPlan.startStop.name} → {selectedTransitPlan.endStop.name}</strong>
+            <span>승차 전후 도보 {selectedTransitPlan.walkMinutes}분 · 탑승 약 {selectedTransitPlan.rideMinutes}분</span>
+          </div>}
+          {transportMode !== "walk" && <a className="transitLink" href={kakaoTransit(start, anchors[0], end, anchors[1])} target="_blank" rel="noreferrer">카카오맵 실시간 버스·지하철 상세 보기 →</a>}
+          <small className="transportNote">지도 선은 승하차 위치와 연결 구간 안내이며, 실시간 도착·환승 정보는 카카오맵에서 확인합니다.</small>
+        </div>
         <p className="routeStatus" aria-live="polite">{status}</p>
       </div> : <button type="button" className="boxRestore searchRestore" onClick={() => setSearchOpen(true)}>장소 검색 열기</button>}
       {layersOpen ? <div className="buttons layerButtons">
@@ -591,21 +684,20 @@ export default function DynamicMap() {
 
     {selectedPlace && active.includes("crowd") && densityOpen && <section className="densityDetail" aria-label="시설별 밀집도 상세">
       <button type="button" className="boxMinimize detailMinimize" aria-label="밀집도 상세 최소화" onClick={() => setDensityOpen(false)}>−</button>
-      {selectedPlace.image ? <img src={selectedPlace.image} alt={`${selectedPlace.name} 현장 사진`} /> : <a className="roadviewPhoto" href={kakaoRoadview(selectedPlace.point)} target="_blank" rel="noreferrer"><span>◉</span><b>카카오 로드뷰 사진 보기</b><small>눌러서 실제 현장 확인</small></a>}
+      {densityPhoto && <img src={densityPhoto} alt={`${selectedPlace.name} 공개 사진`} />}
       <div className="densityCopy">
         <small>밀집도 상세 · {String(hour).padStart(2, "0")}:00</small><h2>{selectedPlace.name}</h2>
         <p>{selectedPlace.category} · {selectedPlace.road}</p>
         <div className="densityBar"><span style={{ width: `${selectedCrowd}%` }} /></div>
         <strong>{selectedCrowd}% · {selectedCrowd >= 75 ? "매우 혼잡" : selectedCrowd >= 55 ? "혼잡" : selectedCrowd >= 35 ? "보통" : "여유"}</strong>
-        <p className="densityNote">시설 유형·시간대·주변 보행로를 반영한 예상치입니다. 실제 현장은 카카오 로드뷰로 함께 확인하세요.</p>
-        {selectedPlace.image && <a className="densityRoadview" href={kakaoRoadview(selectedPlace.point)} target="_blank" rel="noreferrer">카카오 로드뷰에서 현장 보기 →</a>}
+        <p className="densityNote">시설 유형·시간대·주변 보행로를 반영한 예상치입니다.</p>
       </div>
     </section>}
     {selectedPlace && active.includes("crowd") && !densityOpen && <button type="button" className="boxRestore densityRestore" onClick={() => setDensityOpen(true)}>밀집도 상세 열기</button>}
 
     {selectedFacility && active.includes("facility") && facilityOpen && <section className="facilityDetail" aria-label="시설물 정보 상세">
       <button type="button" className="boxMinimize detailMinimize" aria-label="시설물 정보 최소화" onClick={() => setFacilityOpen(false)}>−</button>
-      {facilityPhoto ? <img src={facilityPhoto} alt={`${selectedFacility.name} 공개 사진`} /> : <div className="facilityPhotoEmpty"><span>⌂</span><b>등록된 공개 사진이 없습니다</b><small>시설 정보는 지도 데이터에서 확인했습니다</small></div>}
+      {facilityPhoto && <img src={facilityPhoto} alt={`${selectedFacility.name} 공개 사진`} />}
       <div className="facilityCopy">
         <small>{selectedFacility.category}</small><h2>{selectedFacility.name}</h2>
         <dl>
