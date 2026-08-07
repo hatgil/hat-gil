@@ -136,6 +136,7 @@ export default function DynamicMap() {
   const node = useRef<HTMLDivElement>(null), map = useRef<any>(), path = useRef<any>(), pathHalo = useRef<any>();
   const marks = useRef<any[]>([]), env = useRef<any[]>([]), animationFrame = useRef<number>();
   const routeCache = useRef<Map<string, P[]>>(new Map());
+  const fitOnNextRoute = useRef(true);
   const [mapReady, setMapReady] = useState(false);
   const [start, setStart] = useState("미포항"), [end, setEnd] = useState("청사포 다릿돌전망대");
   const [anchors, setAnchors] = useState<[P, P]>([known.미포항, known.청사포다릿돌전망대]);
@@ -156,7 +157,7 @@ export default function DynamicMap() {
     const init = () => {
       const L = window.L;
       if (!L || !node.current || map.current) return;
-      map.current = L.map(node.current).setView([35.16, 129.18], 14);
+      map.current = L.map(node.current, { zoomControl: true, scrollWheelZoom: true, dragging: true, doubleClickZoom: true, touchZoom: true }).setView([35.16, 129.18], 14);
       const windPane = map.current.createPane("windPane"); windPane.style.zIndex = "390"; windPane.style.pointerEvents = "none";
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map.current);
       setMapReady(true);
@@ -180,9 +181,10 @@ export default function DynamicMap() {
   }, [profile.color]);
 
   useEffect(() => {
-    if (!mapReady || !map.current || !route.length) return;
+    if (!mapReady || !map.current || !route.length || !fitOnNextRoute.current) return;
     const visiblePoints = active.length && environmentPoints.length ? environmentPoints.map(item => item.point) : route;
     map.current.fitBounds(window.L.latLngBounds(visiblePoints), { padding: [55, 55] });
+    fitOnNextRoute.current = false;
   }, [mapReady, route, environmentPoints, active.length]);
 
   useEffect(() => {
@@ -282,6 +284,7 @@ export default function DynamicMap() {
     try {
       const [from, to] = await Promise.all([locate(start), locate(end)]);
       if (!from || !to) throw Error("장소를 찾지 못했습니다.");
+      fitOnNextRoute.current = true;
       setAnchors([from, to]);
       setLoading(false);
     } catch (error) {
@@ -293,7 +296,7 @@ export default function DynamicMap() {
   const toggle = (kind: K) => setActive(active.includes(kind) ? active.filter(value => value !== kind) : [...active, kind]);
 
   return <main>
-    <header><b>〰 바닷길</b><span>입력 장소 기반 · 환경 반경 500m</span></header>
+    <header><b>그늘온</b><span>환경 반경 500m · 지도 범위 자유 조절</span></header>
     <div ref={node} id="map" />
     <section className="controls">
       <form className="inputs" onSubmit={search}>
@@ -309,7 +312,7 @@ export default function DynamicMap() {
       <p className="routeStatus">{status}</p>
     </section>
     {panel ? <aside>
-      <button className="panelClose" aria-label="시간대별 예측 최소화" onClick={() => setPanel(false)}>×</button>
+      <button type="button" className="panelClose" aria-label="시간대별 예측 최소화" onClick={() => setPanel(false)}>×</button>
       <b>시간대별 예측</b>
       <input aria-label="예측 시간" type="range" min="0" max="23" value={hour} onInput={event => setHour(+event.currentTarget.value)} />
       <strong>{String(hour).padStart(2, "0")}:00</strong><span>태양 고도 {hour >= 7 && hour <= 19 ? Math.max(4, 63 - Math.abs(hour - 12) * 9) : 0}°</span>
