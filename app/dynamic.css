@@ -4,3 +4,34 @@
 
 @media(max-width:960px){.controls .buttons{width:min(690px,calc(100vw - 350px))}.forecastPanel{width:292px}.legend{display:none}}
 @media(max-width:760px){header{padding:0 3%}.controls{left:3%;width:94vw}.inputs{grid-template-columns:1fr 1fr}.roadviewActions{width:100%;justify-content:center}.roadviewActions small{display:none}.roadviewActions a{flex:1;text-align:center}.controls .buttons{width:94vw;max-width:94vw}.forecastPanel{top:auto!important;right:3%;bottom:18px;left:auto;width:278px;max-height:56vh;overflow:auto}.panelOpen{top:auto!important;right:3%;bottom:18px}.routeInfo{left:3%;right:3%;bottom:18px;max-width:none}.densityDetail{right:3%;bottom:18px;width:94vw;max-width:360px}.densityDetail>img,.roadviewPhoto{height:108px}}
+
+/* 지도 중앙을 비우고 모든 조작 상자를 좌우 전용 영역에 배치 */
+@media(min-width:901px){
+  #map{position:absolute;top:78px;bottom:0;left:358px;right:332px;width:auto;height:auto;overflow:hidden;border-left:1px solid #d7e5e5;border-right:1px solid #d7e5e5}
+  .controls{top:90px;left:14px;width:330px;max-height:calc(100vh - 310px);overflow:auto;padding:2px 4px 12px;background:transparent;box-shadow:none;scrollbar-width:thin}
+  .searchCard{position:relative;padding-top:35px;border-radius:16px;background:#fff;box-shadow:0 4px 18px #123b4655}
+  .searchCard .inputs{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 10px 9px;border-radius:0;background:transparent;box-shadow:none}
+  .searchCard .inputs input{grid-column:1/3;width:100%;padding:10px;font-size:13px}
+  .searchCard .inputs>b{display:none}.searchCard .inputs button{grid-column:1/3;padding:10px}
+  .searchMinimize{top:7px!important}.searchRestore{margin-bottom:8px}
+  .roadviewActions{width:calc(100% - 20px);max-width:none;margin:0 10px;padding:7px;flex-wrap:wrap;box-shadow:none;background:#f7fbfb}
+  .roadviewActions a{flex:1;padding:6px 5px;text-align:center;font-size:10px}.roadviewActions small{width:100%;text-align:center}
+  .routeStatus{width:calc(100% - 20px);max-width:none;margin:8px 10px 10px;padding:8px;background:#eef7f7;box-shadow:none;font-size:11px}
+  .controls .buttons{width:322px;max-width:322px;margin-top:9px;padding:10px 45px 10px 10px;gap:6px}
+  .buttons button{padding:7px 9px;font-size:11px}.buttons i{font-size:16px}
+  .routeInfo{left:14px;right:auto;bottom:16px;width:330px;max-width:330px;max-height:205px;overflow:auto}
+  .routeInfoRestore{left:14px;bottom:16px}
+  .forecastPanel{top:90px;right:14px;width:304px;max-height:405px;overflow:auto}
+  .panelOpen{top:90px;right:14px}
+  .densityDetail,.facilityDetail{position:absolute;z-index:1700;top:510px;right:14px;bottom:84px;width:304px;overflow:auto;border:1px solid #d3e3e4;border-radius:18px;background:#fff;box-shadow:0 8px 30px #123b4666}
+  .densityRestore,.facilityRestore{position:absolute;z-index:1700;right:14px;top:510px}
+  .legend{right:14px;bottom:16px;width:304px;max-width:304px;padding-right:48px}
+  .legendRestore{position:absolute;z-index:1500;right:14px;bottom:16px}
+}
+
+.searchCard{position:relative}.legend{position:absolute}.legendMinimize{right:8px!important;top:7px!important}.detailMinimize{right:9px!important;top:9px!important;background:#fffffff2!important}.facilityDetail>img{display:block;width:100%;height:145px;object-fit:cover}.facilityPhotoEmpty{display:flex;height:135px;flex-direction:column;align-items:center;justify-content:center;padding:15px;background:linear-gradient(135deg,#e4f6f4,#cde5e6);color:#315e68;text-align:center}.facilityPhotoEmpty span{font-size:31px}.facilityPhotoEmpty b{font-size:14px}.facilityPhotoEmpty small{margin-top:3px;font-size:9px}.facilityCopy{padding:13px 15px 15px}.facilityCopy>small{color:#008270;font-weight:800}.facilityCopy h2{margin:3px 35px 9px 0;color:#173e49;font-size:20px}.facilityCopy dl{margin:0}.facilityCopy dl div{display:grid;grid-template-columns:62px 1fr;gap:5px;padding:6px 0;border-top:1px solid #e5eeee;font-size:11px}.facilityCopy dt{color:#688087;font-weight:800}.facilityCopy dd{margin:0;color:#284e58;font-weight:700;word-break:break-word}.facilityCopy>p{margin:8px 0;color:#516e75;font-size:11px;line-height:1.5}.facilityCopy>a{display:block;margin-top:8px;color:#007e98;font-size:12px;font-weight:800;text-decoration:none}.facilityCopy>em{display:block;margin-top:10px;color:#789097;font-size:8px;font-style:normal}.densityDetail{overflow:hidden}.densityRestore,.facilityRestore{white-space:nowrap}
+
+@media(min-width:901px) and (max-height:760px){.forecastPanel{max-height:350px}.densityDetail,.facilityDetail{top:455px}.densityRestore,.facilityRestore{top:455px}.controls{max-height:calc(100vh - 250px)}.routeInfo{max-height:155px}}
+@media(min-width:901px) and (max-width:1180px){#map{left:318px;right:292px}.controls{left:10px;width:298px}.controls .buttons{width:290px;max-width:290px}.routeInfo{left:10px;width:298px;max-width:298px}.routeInfoRestore{left:10px}.forecastPanel,.densityDetail,.facilityDetail{right:10px;width:272px}.panelOpen,.densityRestore,.facilityRestore{right:10px}.legend{right:10px;width:272px;max-width:272px}.legendRestore{right:10px}}
+@media(max-width:900px){main{overflow:auto;background:#eaf3f3}header{position:sticky;z-index:1800}.controls,.forecastPanel,.routeInfo,.densityDetail,.facilityDetail,.legend{position:relative!important;top:auto!important;right:auto!important;bottom:auto!important;left:auto!important;width:94%!important;max-width:94%!important;margin:12px auto}.controls{order:2;max-height:none;overflow:visible}.searchCard{padding-top:36px}.searchCard .inputs{display:grid;grid-template-columns:1fr 1fr}.searchCard .inputs input{width:100%}.searchCard .inputs button{grid-column:1/3}.controls .buttons{width:100%;max-width:100%}.roadviewActions{width:100%;max-width:100%}#map{position:relative;top:auto;left:auto;right:auto;width:100%;height:58vh;min-height:410px}.forecastPanel{max-height:none}.routeInfoRestore,.panelOpen,.densityRestore,.facilityRestore,.legendRestore{position:relative;top:auto;right:auto;bottom:auto;left:auto;display:block;margin:12px auto}.facilityDetail>img{height:180px}.legend{display:block}}
+.densityDetail{overflow:auto}

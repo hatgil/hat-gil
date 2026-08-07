@@ -36,6 +36,13 @@ type Place = {
   road: string;
   point: P;
   image?: string;
+  address?: string;
+  openingHours?: string;
+  phone?: string;
+  website?: string;
+  operator?: string;
+  wheelchair?: string;
+  description?: string;
   seed: number;
 };
 
@@ -219,6 +226,16 @@ const commonsImage = (tags: Record<string, string> = {}) => {
   return file ? `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file)}?width=640` : undefined;
 };
 
+const searchCommonsImage = async (name: string, signal: AbortSignal) => {
+  const params = new URLSearchParams({
+    action: "query", format: "json", origin: "*", generator: "search", gsrsearch: `${name} 부산`,
+    gsrnamespace: "6", gsrlimit: "1", prop: "imageinfo", iiprop: "url", iiurlwidth: "720",
+  });
+  const payload = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, { signal }).then(response => response.ok ? response.json() : null);
+  const page = payload?.query?.pages ? Object.values(payload.query.pages)[0] as any : null;
+  return page?.imageinfo?.[0]?.thumburl || page?.imageinfo?.[0]?.url || null;
+};
+
 const crowdScore = (place: Place, hour: number) => {
   const peak = hour >= 17 && hour <= 20 ? 24 : hour >= 11 && hour <= 16 ? 16 : hour <= 6 ? -18 : 4;
   const category = /관광|전망/.test(place.category) ? 18 : /카페|음식|상점/.test(place.category) ? 12 : /도로/.test(place.category) ? 6 : 2;
@@ -258,7 +275,9 @@ const fetchEnvironmentFeatures = async (route: P[], signal: AbortSignal): Promis
     places.push({
       id: String(element.id), name: tags.name, category: placeCategory(tags),
       road: tags["addr:street"] || (tags.highway ? tags.name : "주변 보행 구간"), point: [lat, lon],
-      image: commonsImage(tags), seed: Number(element.id) % 97,
+      image: commonsImage(tags), address: [tags["addr:city"], tags["addr:district"], tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ") || undefined,
+      openingHours: tags.opening_hours, phone: tags.phone || tags["contact:phone"], website: tags.website || tags["contact:website"],
+      operator: tags.operator, wheelchair: tags.wheelchair, description: tags.description, seed: Number(element.id) % 97,
     });
   }
   return { buildings: buildings.slice(0, 220), places: places.slice(0, 80) };
@@ -323,6 +342,9 @@ export default function DynamicMap() {
   const [weather, setWeather] = useState<WeatherData | null>(null), [weatherLoading, setWeatherLoading] = useState(true);
   const [buildings, setBuildings] = useState<Building[]>([]), [places, setPlaces] = useState<Place[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null), [facilityPhoto, setFacilityPhoto] = useState<string | null>(null);
+  const [facilityOpen, setFacilityOpen] = useState(true), [searchOpen, setSearchOpen] = useState(true), [legendOpen, setLegendOpen] = useState(true);
+  const [densityOpen, setDensityOpen] = useState(true);
   const [featureStatus, setFeatureStatus] = useState("실제 건물·시설 확인 중…");
   const [panel, setPanel] = useState(true), [status, setStatus] = useState("장소를 입력하고 경로 찾기를 누르세요."), [loading, setLoading] = useState(false);
   const [layersOpen, setLayersOpen] = useState(true), [routeCardOpen, setRouteCardOpen] = useState(true);
@@ -337,6 +359,7 @@ export default function DynamicMap() {
   const allLayersActive = active.length === layerTools.length;
   const selectedPlace = useMemo(() => places.find(place => place.id === selectedPlaceId) || null, [places, selectedPlaceId]);
   const selectedCrowd = selectedPlace ? crowdScore(selectedPlace, hour) : 0;
+  const selectedFacility = useMemo(() => places.find(place => place.id === selectedFacilityId) || null, [places, selectedFacilityId]);
 
   useEffect(() => {
     const init = () => {
@@ -434,6 +457,17 @@ export default function DynamicMap() {
   }, [anchors, selectedDate]);
 
   useEffect(() => {
+    if (!selectedFacility) { setFacilityPhoto(null); return; }
+    if (selectedFacility.image) { setFacilityPhoto(selectedFacility.image); return; }
+    const controller = new AbortController();
+    setFacilityPhoto(null);
+    searchCommonsImage(selectedFacility.name, controller.signal).then(photo => {
+      if (!controller.signal.aborted) setFacilityPhoto(photo);
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [selectedFacility]);
+
+  useEffect(() => {
     env.current.forEach(layer => layer.remove()); env.current = [];
     if (!mapReady || !map.current) return;
     const L = window.L, add = (layer: any) => env.current.push(layer.addTo(map.current));
@@ -461,11 +495,12 @@ export default function DynamicMap() {
     if (active.includes("crowd")) places.slice(0, 42).forEach(place => {
       const score = crowdScore(place, hour);
       const marker = L.marker(place.point, { icon: L.divIcon({ className: "crowdMark", html: `<span style="--crowd-size:${18 + score / 4}px">♟</span><b>${score}%</b>` }) });
-      marker.on("click", () => setSelectedPlaceId(place.id)); add(marker);
+      marker.on("click", () => { setSelectedFacilityId(null); setSelectedPlaceId(place.id); setDensityOpen(true); }); add(marker);
     });
     if (active.includes("facility")) places.filter((_, index) => index % 2 === 0).slice(0, 35).forEach(place => {
       const marker = L.marker(place.point, { icon: L.divIcon({ className: "facilityMark", html: "⌂" }) });
-      marker.bindTooltip(`${place.name} · ${place.category}`, { direction: "top" }); add(marker);
+      marker.bindTooltip(`${place.name} · ${place.category}`, { direction: "top" });
+      marker.on("click", () => { setSelectedPlaceId(null); setSelectedFacilityId(place.id); setFacilityOpen(true); }); add(marker);
     });
     if (active.includes("temp")) generalPoints.forEach(({ point, seed }) => add(L.marker(point, { interactive: false, icon: L.divIcon({ className: "tempMark", html: `${(live.temperature + seed % 3 - 1).toFixed(1)}°` }) })));
     pathHalo.current?.bringToFront(); path.current?.bringToFront();
@@ -482,7 +517,7 @@ export default function DynamicMap() {
     event.preventDefault();
     if (!start.trim() || !end.trim()) return setStatus("두 장소를 모두 입력해 주세요.");
     if (/바다|해상|동해/.test(end)) return setStatus("도착지는 육지 장소로 입력해 주세요.");
-    setLoading(true); setStatus("입력한 장소와 시간대의 최적 보행 경로를 계산 중입니다…"); setSelectedPlaceId(null);
+    setLoading(true); setStatus("입력한 장소와 시간대의 최적 보행 경로를 계산 중입니다…"); setSelectedPlaceId(null); setSelectedFacilityId(null);
     try {
       const [from, to] = await Promise.all([locate(start), locate(end)]);
       if (!from || !to) throw Error("장소를 찾지 못했습니다.");
@@ -495,29 +530,33 @@ export default function DynamicMap() {
   const toggle = (kind: K) => {
     setActive(active.includes(kind) ? active.filter(value => value !== kind) : [...active, kind]);
     if (kind === "crowd" && active.includes(kind)) setSelectedPlaceId(null);
+    if (kind === "facility" && active.includes(kind)) setSelectedFacilityId(null);
   };
 
   return <main>
     <header><div className="brandBlock"><b>그늘온</b><small>그늘On, 온 데 그늘을 켜다</small></div><span>실제 건물 그늘 · 환경 반경 500m</span></header>
     <div ref={node} id="map" />
     <section className="controls">
-      <form className="inputs" onSubmit={search}>
-        <input aria-label="출발지" value={start} onChange={event => setStart(event.target.value)} placeholder="출발지" />
-        <b>→</b>
-        <input aria-label="도착지" value={end} onChange={event => setEnd(event.target.value)} placeholder="도착지" />
-        <button disabled={loading}>{loading ? "계산 중…" : "경로 찾기"}</button>
-      </form>
-      <div className="roadviewActions" aria-label="카카오 로드뷰 확인">
-        <a href={kakaoRoadview(anchors[0])} target="_blank" rel="noreferrer">◉ 출발지 로드뷰</a>
-        <a href={kakaoRoadview(anchors[1])} target="_blank" rel="noreferrer">◉ 도착지 로드뷰</a>
-        <small>카카오맵 현장 사진으로 위치 확인</small>
-      </div>
+      {searchOpen ? <div className="searchCard">
+        <button type="button" className="boxMinimize searchMinimize" aria-label="장소 검색 최소화" onClick={() => setSearchOpen(false)}>−</button>
+        <form className="inputs" onSubmit={search}>
+          <input aria-label="출발지" value={start} onChange={event => setStart(event.target.value)} placeholder="출발지" />
+          <b>→</b>
+          <input aria-label="도착지" value={end} onChange={event => setEnd(event.target.value)} placeholder="도착지" />
+          <button disabled={loading}>{loading ? "계산 중…" : "경로 찾기"}</button>
+        </form>
+        <div className="roadviewActions" aria-label="카카오 로드뷰 확인">
+          <a href={kakaoRoadview(anchors[0])} target="_blank" rel="noreferrer">◉ 출발지 로드뷰</a>
+          <a href={kakaoRoadview(anchors[1])} target="_blank" rel="noreferrer">◉ 도착지 로드뷰</a>
+          <small>카카오맵 현장 사진으로 위치 확인</small>
+        </div>
+        <p className="routeStatus" aria-live="polite">{status}</p>
+      </div> : <button type="button" className="boxRestore searchRestore" onClick={() => setSearchOpen(true)}>장소 검색 열기</button>}
       {layersOpen ? <div className="buttons layerButtons">
         <button type="button" className="boxMinimize" aria-label="환경 데이터 최소화" onClick={() => setLayersOpen(false)}>−</button>
         {layerTools.map(([kind, icon, name]) => <button type="button" key={kind} aria-pressed={active.includes(kind)} className={active.includes(kind) ? "on" : ""} onClick={() => toggle(kind)}><i>{icon}</i>{name}</button>)}
         <button type="button" aria-pressed={allLayersActive} className={`layerAll ${allLayersActive ? "on" : ""}`} onClick={() => setActive(allLayersActive ? [] : layerTools.map(([kind]) => kind))}>◎ 전체 레이어</button>
       </div> : <button type="button" className="boxRestore layerRestore" onClick={() => setLayersOpen(true)}>환경 데이터 열기</button>}
-      <p className="routeStatus" aria-live="polite">{status}</p>
     </section>
 
     {panel ? <aside className="forecastPanel">
@@ -549,8 +588,8 @@ export default function DynamicMap() {
       </div>
     </div> : <button type="button" className="boxRestore routeInfoRestore" onClick={() => setRouteCardOpen(true)}>시간대별 경로 열기</button>}
 
-    {selectedPlace && active.includes("crowd") && <section className="densityDetail" aria-label="시설별 밀집도 상세">
-      <button type="button" className="densityClose" aria-label="밀집도 상세 닫기" onClick={() => setSelectedPlaceId(null)}>×</button>
+    {selectedPlace && active.includes("crowd") && densityOpen && <section className="densityDetail" aria-label="시설별 밀집도 상세">
+      <button type="button" className="boxMinimize detailMinimize" aria-label="밀집도 상세 최소화" onClick={() => setDensityOpen(false)}>−</button>
       {selectedPlace.image ? <img src={selectedPlace.image} alt={`${selectedPlace.name} 현장 사진`} /> : <a className="roadviewPhoto" href={kakaoRoadview(selectedPlace.point)} target="_blank" rel="noreferrer"><span>◉</span><b>카카오 로드뷰 사진 보기</b><small>눌러서 실제 현장 확인</small></a>}
       <div className="densityCopy">
         <small>밀집도 상세 · {String(hour).padStart(2, "0")}:00</small><h2>{selectedPlace.name}</h2>
@@ -561,7 +600,27 @@ export default function DynamicMap() {
         {selectedPlace.image && <a className="densityRoadview" href={kakaoRoadview(selectedPlace.point)} target="_blank" rel="noreferrer">카카오 로드뷰에서 현장 보기 →</a>}
       </div>
     </section>}
+    {selectedPlace && active.includes("crowd") && !densityOpen && <button type="button" className="boxRestore densityRestore" onClick={() => setDensityOpen(true)}>밀집도 상세 열기</button>}
 
-    <div className="legend"><b>검증된 환경 표시</b><span>보라색: 실제 건물에서 계산한 그늘</span><span><i className="blue" />해풍</span><span><i className="orange" />빌딩풍</span></div>
+    {selectedFacility && active.includes("facility") && facilityOpen && <section className="facilityDetail" aria-label="시설물 정보 상세">
+      <button type="button" className="boxMinimize detailMinimize" aria-label="시설물 정보 최소화" onClick={() => setFacilityOpen(false)}>−</button>
+      {facilityPhoto ? <img src={facilityPhoto} alt={`${selectedFacility.name} 공개 사진`} /> : <div className="facilityPhotoEmpty"><span>⌂</span><b>등록된 공개 사진이 없습니다</b><small>시설 정보는 지도 데이터에서 확인했습니다</small></div>}
+      <div className="facilityCopy">
+        <small>{selectedFacility.category}</small><h2>{selectedFacility.name}</h2>
+        <dl>
+          <div><dt>위치</dt><dd>{selectedFacility.address || selectedFacility.road}</dd></div>
+          {selectedFacility.openingHours && <div><dt>운영시간</dt><dd>{selectedFacility.openingHours}</dd></div>}
+          {selectedFacility.operator && <div><dt>운영기관</dt><dd>{selectedFacility.operator}</dd></div>}
+          {selectedFacility.phone && <div><dt>전화</dt><dd>{selectedFacility.phone}</dd></div>}
+          {selectedFacility.wheelchair && <div><dt>휠체어</dt><dd>{selectedFacility.wheelchair === "yes" ? "이용 가능" : selectedFacility.wheelchair === "no" ? "이용 어려움" : "일부 가능"}</dd></div>}
+        </dl>
+        {selectedFacility.description && <p>{selectedFacility.description}</p>}
+        {selectedFacility.website && <a href={selectedFacility.website} target="_blank" rel="noreferrer">시설 공식 웹사이트 보기 →</a>}
+        <em>시설 정보: OpenStreetMap · 사진: Wikimedia Commons 공개 자료</em>
+      </div>
+    </section>}
+    {selectedFacility && active.includes("facility") && !facilityOpen && <button type="button" className="boxRestore facilityRestore" onClick={() => setFacilityOpen(true)}>시설물 정보 열기</button>}
+
+    {legendOpen ? <div className="legend"><button type="button" className="boxMinimize legendMinimize" aria-label="지도 범례 최소화" onClick={() => setLegendOpen(false)}>−</button><b>검증된 환경 표시</b><span>보라색: 실제 건물에서 계산한 그늘</span><span><i className="blue" />해풍</span><span><i className="orange" />빌딩풍</span></div> : <button type="button" className="boxRestore legendRestore" onClick={() => setLegendOpen(true)}>지도 범례 열기</button>}
   </main>;
 }
